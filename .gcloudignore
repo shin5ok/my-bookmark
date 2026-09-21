@@ -1,0 +1,9 @@
+.gcloudignore
+.git
+.env
+.env.*
+.cache
+bin
+docs
+node_modules
+*.log
