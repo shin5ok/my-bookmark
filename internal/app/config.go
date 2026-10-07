@@ -2,18 +2,48 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
+
+	"my-bookmark/internal/iap"
 )
 
-type Config struct{ Project, Port, BaseURL, Env, GoogleClientID, GoogleClientSecret, GeminiKey, GeminiModel string }
+type Config struct {
+	APIOnly                            bool
+	APIBaseURL                         string
+	Project, Port, BaseURL, Env        string
+	GoogleClientID, GoogleClientSecret string
+	GeminiModel, GeminiLocation        string
+	IAPAudience                        string
+	IAPAllowlist                       iap.Allowlist
+}
 
 func LoadConfig() (Config, error) {
-	c := Config{Project: os.Getenv("GOOGLE_CLOUD_PROJECT"), Port: env("PORT", "8080"), BaseURL: env("BASE_URL", "http://localhost:8080"), Env: env("APP_ENV", "production"), GoogleClientID: os.Getenv("GOOGLE_CLIENT_ID"), GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"), GeminiKey: os.Getenv("GEMINI_API_KEY"), GeminiModel: env("GEMINI_MODEL", "gemini-3.8-flash")}
+	c := Config{Project: os.Getenv("GOOGLE_CLOUD_PROJECT"), Port: env("PORT", "8080"), BaseURL: env("BASE_URL", "http://localhost:8080"), Env: env("APP_ENV", "production"), GoogleClientID: os.Getenv("GOOGLE_CLIENT_ID"), GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"), GeminiModel: env("GEMINI_MODEL", "gemini-3.8-flash"), GeminiLocation: env("GEMINI_LOCATION", "global"), IAPAudience: os.Getenv("IAP_AUDIENCE")}
+	if value := os.Getenv("API_ONLY"); value != "" && value != "true" && value != "false" {
+		return c, errors.New("API_ONLY must be true or false")
+	}
+	c.APIOnly = os.Getenv("API_ONLY") == "true"
+	c.APIBaseURL = strings.TrimRight(os.Getenv("API_BASE_URL"), "/")
 	c.BaseURL = strings.TrimRight(c.BaseURL, "/")
+	if c.IAPAudience != "" || c.APIOnly {
+		data, err := os.ReadFile(env("ALLOW_ACCOUNTS_FILE", "allow_accounts.yaml"))
+		if err != nil {
+			return c, fmt.Errorf("read allow_accounts.yaml: %w", err)
+		}
+		c.IAPAllowlist, err = iap.ParseAllowlist(data)
+		if err != nil {
+			return c, err
+		}
+	}
 	return c, c.Validate()
 }
+
+var iapAudiencePattern = regexp.MustCompile(`^/projects/[0-9]+/locations/[a-z0-9-]+/services/[a-z0-9-]+$`)
+
 func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -38,8 +68,8 @@ func (c Config) Validate() error {
 		if os.Getenv("FIRESTORE_EMULATOR_HOST") != "" {
 			return errors.New("production cannot use Firestore Emulator")
 		}
-		if c.GoogleClientID == "" || c.GoogleClientSecret == "" || c.GeminiKey == "" {
-			return errors.New("Google OAuth credentials and GEMINI_API_KEY are required in production")
+		if (!c.APIOnly && c.IAPAudience == "") || len(c.IAPAllowlist.Members()) == 0 {
+			return errors.New("IAP_AUDIENCE and allow_accounts.yaml are required in production")
 		}
 	} else {
 		if os.Getenv("K_SERVICE") != "" {
@@ -52,8 +82,17 @@ func (c Config) Validate() error {
 			return errors.New("development requires FIRESTORE_EMULATOR_HOST")
 		}
 	}
+	if c.APIBaseURL != "" {
+		u, err := url.Parse(c.APIBaseURL)
+		if err != nil || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "https" && !(c.Env == "development" && u.Scheme == "http" && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1"))) {
+			return errors.New("API_BASE_URL must be an HTTPS origin (localhost HTTP is allowed in development)")
+		}
+	}
 	if (c.GoogleClientID == "") != (c.GoogleClientSecret == "") {
 		return errors.New("set both Google OAuth credentials")
+	}
+	if c.IAPAudience != "" && !iapAudiencePattern.MatchString(c.IAPAudience) {
+		return errors.New("IAP_AUDIENCE must identify this Cloud Run service")
 	}
 	return nil
 }

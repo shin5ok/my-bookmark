@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 export GOCACHE := $(CURDIR)/.cache/go-build
 export GOPATH := $(CURDIR)/.cache/go
-export PROJECT_ID REGION SERVICE BASE_URL GOOGLE_CLIENT_ID GEMINI_MODEL
+export PROJECT_ID REGION SERVICE BASE_URL GOOGLE_CLIENT_ID GEMINI_MODEL GEMINI_LOCATION
 
 .PHONY: help dev fmt vet test test-integration build clean emulator emulator-stop bootstrap secrets indexes deploy url preview
 help: ## コマンド一覧
@@ -27,14 +27,14 @@ emulator-stop: ## Emulatorを停止（データは一時的）
 	docker-compose down
 bootstrap: ## GCPのAPI・DB・実行用サービスアカウント・Secretを初期構築
 	@bash scripts/bootstrap.sh
-secrets: ## .envのOAuthシークレットとGeminiキーをSecret Managerに登録
+secrets: ## .envのOAuthシークレットをSecret Managerに登録
 	@bash scripts/secrets.sh
 indexes: ## Firestoreの複合インデックスを作成
 	@bash scripts/indexes.sh
-deploy: ## テスト・ビルド後、Cloud Runへソースデプロイ
-	$(MAKE) test vet build
+deploy: ## テスト・静的解析後、Cloud BuildのbuildpacksでビルドしてCloud Runへデプロイ
+	$(MAKE) test vet
 	@bash scripts/deploy.sh
-url: ## Cloud RunのURLとOAuthリダイレクトURIを表示
+url: ## IAPで保護されたCloud RunのURLを表示
 	@bash scripts/url.sh
 preview: ## テスト用サンプル記事で画面確認（本番機能・外部APIなし）
 	SHIORI_PREVIEW=1 go test ./internal/app -run '^TestPreviewServer$$' -count=1 -timeout=30m

@@ -17,4 +17,3 @@ BUILD_SA="${SERVICE}-build@${PROJECT_ID}.iam.gserviceaccount.com"
 # Service-account IDs must be at most 30 characters.
 if (( ${#SERVICE} > 22 )); then echo 'SERVICE must be at most 22 characters.' >&2; exit 1; fi
 OAUTH_SECRET="${SERVICE}-google-client-secret"
-GEMINI_SECRET="${SERVICE}-gemini-api-key"

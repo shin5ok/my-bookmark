@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"golang.org/x/oauth2/google"
 	"my-bookmark/internal/app"
 	"my-bookmark/internal/content"
 	"my-bookmark/internal/store"
@@ -34,25 +35,24 @@ func run() error {
 	defer db.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	var summarizer app.Summarizer
-	if cfg.GeminiKey != "" {
-		summarizer = &content.Gemini{Key: cfg.GeminiKey, Model: cfg.GeminiModel}
+	tokenSource, err := google.DefaultTokenSource(ctx, "https://www.googleapis.com/auth/cloud-platform")
+	if err != nil {
+		return err
 	}
+	var summarizer app.Summarizer = &content.Gemini{Project: cfg.Project, Location: cfg.GeminiLocation, Model: cfg.GeminiModel, TokenSource: tokenSource}
 	database := store.New(db)
 	application, err := app.New(cfg, database, summarizer)
 	if err != nil {
 		return err
 	}
 	workerDone := make(chan struct{})
-	if summarizer != nil {
-		worker := app.NewWorker(database, summarizer, cfg.GeminiModel)
-		go func() {
-			defer close(workerDone)
+	worker := app.NewWorker(database, summarizer, cfg.GeminiModel)
+	go func() {
+		defer close(workerDone)
+		if !cfg.APIOnly {
 			worker.Run(ctx)
-		}()
-	} else {
-		close(workerDone)
-	}
+		}
+	}()
 	addr := ":" + cfg.Port
 	if cfg.Env == "development" {
 		addr = "127.0.0.1:" + cfg.Port

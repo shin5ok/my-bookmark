@@ -11,13 +11,14 @@ import (
 
 	"my-bookmark/internal/content"
 	"my-bookmark/internal/store"
+	"my-bookmark/internal/summary"
 )
 
 type JobQueue interface {
 	NextQueued(context.Context) (*store.SummaryJob, string, error)
 	Get(context.Context, string) (store.Article, error)
 	UpdateStage(context.Context, string, string, string, string, []string) error
-	FinishJob(context.Context, string, string, string, []string, string, []string, string) error
+	FinishJob(context.Context, string, string, string, []string, string, []string, string, []string) error
 }
 type Worker struct {
 	db       JobQueue
@@ -52,7 +53,7 @@ func (w *Worker) Run(ctx context.Context) {
 			}
 			continue
 		}
-		w.process(ctx, job.ArticleID, lease)
+		w.process(ctx, job.ArticleID, lease, job.Style)
 	}
 }
 func wait(ctx context.Context, d time.Duration) bool {
@@ -65,12 +66,14 @@ func wait(ctx context.Context, d time.Duration) bool {
 		return true
 	}
 }
-func (w *Worker) process(parent context.Context, id, lease string) {
+func (w *Worker) process(parent context.Context, id, lease string, style summary.Style) {
 	ctx, cancel := context.WithTimeout(parent, 9*time.Minute)
 	defer cancel()
 	article, err := w.db.Get(ctx, id)
 	var points []string
+	var tldr []string
 	title := ""
+	generatedTitle := ""
 	var sources []string
 	failure := ""
 	if err != nil {
@@ -89,7 +92,9 @@ func (w *Worker) process(parent context.Context, id, lease string) {
 				if e := w.stage(ctx, id, lease, "summarizing", "記事の要点を確認しています", sources); e != nil {
 					failure = "要約を中断しました。"
 				} else {
-					points, err = w.summary.Summarize(ctx, title, doc.Text)
+					var result summary.Result
+					result, err = w.summary.Summarize(ctx, title, doc.Text, style)
+					points, generatedTitle, tldr = result.Points, result.Title, result.TLDR
 					if err != nil {
 						failure = "要約を作成できませんでした。"
 					}
@@ -140,7 +145,9 @@ func (w *Worker) process(parent context.Context, id, lease string) {
 						if e := w.stage(ctx, id, lease, "summarizing", "記事と関連ページから要点をまとめています", sources); e != nil {
 							failure = "要約処理が中断されました。"
 						} else {
-							points, err = w.summary.Summarize(ctx, title, input)
+							var result summary.Result
+							result, err = w.summary.Summarize(ctx, title, input, style)
+							points, generatedTitle, tldr = result.Points, result.Title, result.TLDR
 							if err != nil {
 								failure = "要約を作成できませんでした。"
 							} else if err = content.ValidateSummary(points); err != nil {
@@ -159,9 +166,14 @@ func (w *Worker) process(parent context.Context, id, lease string) {
 	if ctx.Err() != nil && failure == "" {
 		failure = "要約処理が中断されました。"
 	}
+	if generatedTitle != "" {
+		title = generatedTitle
+	} else if style != summary.Standard && article.Title != "" {
+		title = article.Title
+	}
 	finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(parent), 3*time.Second)
 	defer finishCancel()
-	if e := w.db.FinishJob(finishCtx, id, lease, title, points, w.model, sources, failure); e != nil {
+	if e := w.db.FinishJob(finishCtx, id, lease, title, points, w.model, sources, failure, tldr); e != nil {
 		if !errors.Is(e, store.ErrBusy) {
 			slog.Error("summary result could not be saved", "article", id, "error", e)
 		}

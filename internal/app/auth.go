@@ -15,6 +15,10 @@ func (a *App) cookie(w http.ResponseWriter, name, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", HttpOnly: true, Secure: a.cfg.secure(), SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
 }
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
+	if a.iapVerifier != nil {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
 	if a.oauth == nil {
 		a.problem(w, r, 503, "Googleログインは準備中です。管理者が認証設定を行うと利用できます。")
 		return
@@ -101,5 +105,9 @@ func (a *App) logout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.cookie(w, a.cfg.cookieName(), "", -1)
+	if a.iapVerifier != nil {
+		http.Redirect(w, r, "/?gcp-iap-mode=CLEAR_LOGIN_COOKIE", http.StatusSeeOther)
+		return
+	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

@@ -1,0 +1,73 @@
+package store
+
+import (
+	"cloud.google.com/go/firestore"
+	"context"
+	"errors"
+	"my-bookmark/internal/summary"
+	"os"
+	"testing"
+	"time"
+)
+
+func TestTLDRChangesOnlyWithSuccessfulOwnedJob(t *testing.T) {
+	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
+		t.Skip("requires Firestore Emulator")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	c, err := firestore.NewClient(ctx, "demo-tldr-"+Hash(RandomToken())[:12])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	s := New(c)
+	u := User{ID: Hash(RandomToken()), Name: "reader"}
+	a, err := s.Save(ctx, u, "https://example.com/"+RandomToken(), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, lease, err := s.NextQueued(ctx)
+	if err != nil || lease == "" {
+		t.Fatal("claim", err)
+	}
+	original := []string{"結論", "重要性", "影響"}
+	if err = s.FinishJob(ctx, a.ID, "wrong", "不正タイトル", []string{"不正本文"}, "test", nil, "", []string{"不正", "更新"}); !errors.Is(err, ErrBusy) {
+		t.Fatal("stale worker accepted", err)
+	}
+	if err = s.FinishJob(ctx, a.ID, lease, "初回タイトル", []string{"初回本文"}, "test", nil, "", original); err != nil {
+		t.Fatal(err)
+	}
+	check := func(title, point string) {
+		t.Helper()
+		got, e := s.Get(ctx, a.ID)
+		if e != nil || got.Title != title || len(got.TLDR) != 3 || got.TLDR[0] != original[0] || got.Points[0] != point {
+			t.Fatalf("inconsistent result: %+v %v", got, e)
+		}
+	}
+	check("初回タイトル", "初回本文")
+	if _, err = s.Enqueue(ctx, u.ID, a.ID, summary.Detailed); err != nil {
+		t.Fatal(err)
+	}
+	check("初回タイトル", "初回本文")
+	_, lease, err = s.NextQueued(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.FinishJob(ctx, a.ID, lease, "失敗タイトル", []string{"失敗本文"}, "test", nil, "generation failed", []string{"不完全", "データ"}); err != nil {
+		t.Fatal(err)
+	}
+	check("初回タイトル", "初回本文")
+	if _, err = s.Enqueue(ctx, u.ID, a.ID, summary.Simple); err != nil {
+		t.Fatal(err)
+	}
+	_, lease, err = s.NextQueued(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original = []string{"新しい結論", "新しい重要性", "新しい影響"}
+	if err = s.FinishJob(ctx, a.ID, lease, "更新タイトル", []string{"更新本文"}, "test", nil, "", original); err != nil {
+		t.Fatal(err)
+	}
+	check("更新タイトル", "更新本文")
+}

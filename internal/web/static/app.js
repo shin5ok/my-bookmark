@@ -15,17 +15,30 @@
     const el = article(id);
     if (!el) return;
     const box = el.querySelector('.summary-content');
-    const button = el.querySelector('.generate-button');
     const summary = el.querySelector('.summary');
     el.querySelector('.source-list')?.remove();
-    el.querySelector('.summary').dataset.status = data.status;
-    if (data.status === 'ready' && Array.isArray(data.points)) {
+    summary.dataset.status = data.status;
+    const hasPoints = Array.isArray(data.points) && data.points.length > 0;
+    const hasTLDR = Array.isArray(data.tldr) && data.tldr.length >= 2;
+    const disclosure = el.querySelector('.summary-disclosure');
+    disclosure.hidden = !hasPoints;
+    el.querySelector('.tldr')?.remove();
+    if (hasTLDR) {
+      const link = document.createElement('div'); link.className = 'tldr';
+      const label = document.createElement('span'); label.className = 'tldr-label'; label.textContent = 'TL;DR';
+      const lines = document.createElement('ul');
+      data.tldr.slice(0, 5).forEach(line => { const li = document.createElement('li'); li.textContent = line; lines.append(li); });
+      link.append(label, lines); summary.before(link);
+    }
+    const busy = ['queued', 'processing'].includes(data.status);
+    const children = [];
+    if (hasPoints) {
       const list = document.createElement('ul');
       data.points.slice(0, 5).forEach(point => {
         const li = document.createElement('li'); li.textContent = point; list.append(li);
       });
-      box.replaceChildren(list);
-      if (data.title) el.querySelector('.article-title a').textContent = data.title;
+      children.push(list);
+      if (data.status === 'ready' && data.title) el.querySelector('.article-title a').firstChild.textContent = `${data.title} `;
       if (Array.isArray(data.sources) && data.sources.length) {
         const sources = document.createElement('p'); sources.className = 'source-list';
         sources.append(document.createTextNode('参照元：'));
@@ -38,17 +51,28 @@
           link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = url.hostname;
           sources.append(link);
         });
-        if (sources.querySelector('a')) summary.insertAdjacentElement('afterend', sources);
+        if (sources.querySelector('a')) box.insertAdjacentElement('afterend', sources);
       }
-      button?.remove();
-    } else {
+    }
+    const statusBox = el.querySelector('.summary-status');
+    statusBox.replaceChildren();
+    if (data.status !== 'ready') {
       const text = document.createElement('p'); text.className = 'summary-message';
-      text.textContent = ['queued', 'processing'].includes(data.status)
-        ? (data.progress || '記事の要点をまとめています…')
+      text.textContent = busy
+        ? `${data.progress || '記事の要点をまとめています'}…`
         : data.status === 'interrupted' ? '処理が中断されました。再試行できます。'
         : data.status === 'failed' ? (data.error || '要約を作成できませんでした。再試行できます。') : '要約はまだありません。作成できます。';
-      box.replaceChildren(text);
-      if (button) { button.disabled = ['queued','processing'].includes(data.status); button.textContent = data.status === 'pending' ? '要約を作成する' : '要約を再試行する'; }
+      statusBox.append(text);
+    }
+    box.replaceChildren(...children);
+    const styles = el.querySelector('.summary-styles');
+    if (styles) styles.hidden = !hasPoints;
+    el.querySelectorAll('.summary-style').forEach(button => { button.disabled = busy; });
+    const button = el.querySelector('.generate-button');
+    if (button) {
+      button.hidden = hasPoints;
+      button.disabled = busy;
+      button.textContent = busy ? '要約を作成中…' : data.status === 'pending' ? '要約を作成する' : '要約を再試行する';
     }
   }
   async function poll(id) {
@@ -62,15 +86,16 @@
       } catch { return; }
     }
   }
-  async function generate(id) {
+  async function generate(id, style = '') {
     if (!csrf || !/^[a-f0-9]{64}$/.test(id) || active.has(id)) return;
     active.add(id);
-    const button = article(id)?.querySelector('.generate-button');
-    if (button) { button.disabled = true; button.textContent = '要約を作成中…'; }
+    const el = article(id);
+    const controls = el?.querySelectorAll('.generate-button, .summary-style') || [];
+    controls.forEach(button => { button.disabled = true; });
     try {
       const response = await fetch(`/articles/${id}/summary`, {
         method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ csrf }),
+        body: new URLSearchParams({ csrf, style }),
       });
       if (!response.headers.get('content-type')?.includes('application/json')) {
         throw new Error(response.status === 401 || response.status === 403 ? 'ページを再読み込みし、ログインしてから再試行してください。' : '通信に失敗しました。時間をおいて再試行してください。');
@@ -81,13 +106,30 @@
       if (['queued','processing'].includes(data.status)) await poll(id);
     } catch (error) {
       toast(error.message);
-      if (button) button.disabled = false;
     } finally {
       active.delete(id);
-      if (button?.isConnected && !['queued','processing'].includes(elStatus(id))) { button.textContent = elStatus(id) === 'pending' ? '要約を作成する' : '要約を再試行する'; button.disabled = false; }
+      if (!['queued','processing'].includes(elStatus(id))) controls.forEach(button => { button.disabled = false; });
     }
   }
+  document.querySelectorAll('[data-copy-target]').forEach(button => button.addEventListener('click', async () => {
+    const target = document.getElementById(button.dataset.copyTarget);
+    if (!target) return;
+    const value = target instanceof HTMLInputElement ? target.value : target.textContent;
+    try {
+      await navigator.clipboard.writeText(value);
+      toast('コピーしました。');
+    } catch {
+      if (target instanceof HTMLInputElement) {
+        target.focus(); target.select();
+      } else {
+        const range = document.createRange(); range.selectNodeContents(target);
+        const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+      }
+      toast('自動コピーできませんでした。選択した全文をコピーしてください。');
+    }
+  }));
   document.querySelectorAll('.generate-button').forEach(button => button.addEventListener('click', () => generate(button.dataset.id)));
+  document.querySelectorAll('.summary-style').forEach(button => button.addEventListener('click', () => generate(button.dataset.id, button.dataset.style)));
   document.querySelectorAll('.summary[data-status="queued"], .summary[data-status="processing"]').forEach(el => poll(el.closest('[data-article]').dataset.article));
   document.querySelectorAll('.delete-form').forEach(form => form.addEventListener('submit', event => {
     if (!window.confirm('このブックマークを削除しますか？')) event.preventDefault();

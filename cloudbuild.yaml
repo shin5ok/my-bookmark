@@ -1,0 +1,15 @@
+steps:
+  - name: gcr.io/k8s-skaffold/pack
+    args:
+      - build
+      - shiori-buildpack:latest
+      - --builder=gcr.io/buildpacks/builder:google-24
+      - --env=GOOGLE_BUILDABLE=./cmd/server
+      - --env=CGO_ENABLED=0
+      - --path=/workspace
+  - name: gcr.io/cloud-builders/docker
+    args: ['build', '-f', 'Dockerfile.deploy', '-t', '$_IMAGE', '.']
+  - name: gcr.io/cloud-builders/docker
+    args: ['push', '$_IMAGE']
+options:
+  logging: CLOUD_LOGGING_ONLY

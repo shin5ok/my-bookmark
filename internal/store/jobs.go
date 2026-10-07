@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"my-bookmark/internal/summary"
 )
 
 func readQuota(ctx context.Context, tx *firestore.Transaction, c *firestore.Client, uid string, now time.Time) (quota, *firestore.DocumentRef, error) {
@@ -39,7 +40,10 @@ func consumeQuota(q *quota, now time.Time) bool {
 	q.ExpiresAt = now.Add(48 * time.Hour)
 	return true
 }
-func (s *Store) Enqueue(ctx context.Context, uid, aid string) (string, error) {
+func (s *Store) Enqueue(ctx context.Context, uid, aid string, style summary.Style) (string, error) {
+	if !style.Valid() {
+		return "", summary.ErrInvalidStyle
+	}
 	now := time.Now().UTC()
 	err := s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 		if _, err := tx.Get(s.bookmark(uid, aid)); err != nil {
@@ -54,7 +58,7 @@ func (s *Store) Enqueue(ctx context.Context, uid, aid string) (string, error) {
 		if err = ad.DataTo(&a); err != nil {
 			return err
 		}
-		if a.Status == "ready" {
+		if a.Status == "ready" && style == summary.Standard {
 			return ErrBusy
 		}
 		jr := s.client.Collection("summary_jobs").Doc(aid)
@@ -79,6 +83,7 @@ func (s *Store) Enqueue(ctx context.Context, uid, aid string) (string, error) {
 			return ErrRateLimited
 		}
 		j.ArticleID = aid
+		j.Style = style
 		j.UserID = uid
 		j.Status = "queued"
 		j.Stage = "queued"
@@ -89,6 +94,9 @@ func (s *Store) Enqueue(ctx context.Context, uid, aid string) (string, error) {
 		a.Status = "queued"
 		a.Stage = "queued"
 		a.Progress = "再試行を受け付けました"
+		if style != summary.Standard {
+			a.Progress = "ページを再取得して要約し直します"
+		}
 		a.LastError = ""
 		a.Lease = ""
 		a.LeaseUntil = time.Time{}
@@ -114,7 +122,7 @@ func (s *Store) NextQueued(ctx context.Context) (*SummaryJob, string, error) {
 		id := candidate.Ref.ID
 		token := RandomToken()
 		now := time.Now().UTC()
-		userID := ""
+		var claimedJob SummaryJob
 		claimed := false
 		err = s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 			jr := s.client.Collection("summary_jobs").Doc(id)
@@ -126,7 +134,6 @@ func (s *Store) NextQueued(ctx context.Context) (*SummaryJob, string, error) {
 			if e = jd.DataTo(&j); e != nil {
 				return e
 			}
-			userID = j.UserID
 			if j.Status != "queued" {
 				return ErrBusy
 			}
@@ -154,6 +161,7 @@ func (s *Store) NextQueued(ctx context.Context) (*SummaryJob, string, error) {
 			j.Attempts++
 			j.Lease = token
 			j.LeaseUntil = now.Add(5 * time.Minute)
+			claimedJob = j
 			a.Status = "processing"
 			a.Stage = "fetching"
 			a.Progress = "記事の本文を取得しています"
@@ -169,7 +177,8 @@ func (s *Store) NextQueued(ctx context.Context) (*SummaryJob, string, error) {
 			if !claimed {
 				continue
 			}
-			return &SummaryJob{ArticleID: id, UserID: userID}, token, nil
+			claimedJob.ArticleID = id
+			return &claimedJob, token, nil
 		}
 		if !errors.Is(err, ErrBusy) {
 			return nil, "", err
@@ -213,7 +222,10 @@ func (s *Store) UpdateStage(ctx context.Context, id, lease, stage, progress stri
 		}
 		a.Stage = stage
 		a.Progress = progress
-		a.Sources = sources
+		// Keep the references paired with the last successful summary until replacement.
+		if len(a.Points) == 0 {
+			a.Sources = sources
+		}
 		j.Stage = stage
 		j.LeaseUntil = time.Now().Add(5 * time.Minute)
 		a.LeaseUntil = j.LeaseUntil
@@ -223,7 +235,7 @@ func (s *Store) UpdateStage(ctx context.Context, id, lease, stage, progress stri
 		return tx.Set(jr, j)
 	})
 }
-func (s *Store) FinishJob(ctx context.Context, id, lease, title string, points []string, model string, sources []string, failure string) error {
+func (s *Store) FinishJob(ctx context.Context, id, lease, title string, points []string, model string, sources []string, failure string, tldr []string) error {
 	return s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 		ar := s.article(id)
 		ad, err := tx.Get(ar)
@@ -253,7 +265,9 @@ func (s *Store) FinishJob(ctx context.Context, id, lease, title string, points [
 		a.Progress = ""
 		j.LastError = failure
 		a.LastError = failure
-		a.Sources = sources
+		if failure == "" || len(a.Points) == 0 {
+			a.Sources = sources
+		}
 		if failure == "" {
 			a.Status = "ready"
 			a.Stage = "ready"
@@ -261,6 +275,7 @@ func (s *Store) FinishJob(ctx context.Context, id, lease, title string, points [
 			j.Status = "done"
 			j.Stage = "done"
 			a.Points = points
+			a.TLDR = tldr
 			a.Model = model
 			if title != "" {
 				a.Title = title

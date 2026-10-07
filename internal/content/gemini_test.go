@@ -7,6 +7,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"golang.org/x/oauth2"
+	"my-bookmark/internal/summary"
 )
 
 func TestGeminiStructuredResponse(t *testing.T) {
@@ -15,7 +18,11 @@ func TestGeminiStructuredResponse(t *testing.T) {
 		httpStatus           int
 		wantErr              bool
 	}{
-		{"valid", `{"sufficient":true,"points":["結論","理由"]}`, "STOP", 200, false},
+		{"valid", `{"sufficient":true,"title":"新しい技術の要点","tldr":["結論の短文","重要性の短文","影響の短文"],"points":["結論","理由"]}`, "STOP", 200, false},
+		{"invalid title", `{"sufficient":true,"title":"An English title","tldr":["結論の短文","重要性の短文","影響の短文"],"points":["結論","理由"]}`, "STOP", 200, false},
+		{"long title", `{"sufficient":true,"title":"` + strings.Repeat("長", 61) + `","tldr":["結論の短文","重要性の短文","影響の短文"],"points":["結論","理由"]}`, "STOP", 200, false},
+		{"missing TLDR", `{"sufficient":true,"title":"日本語タイトル","points":["結論","理由"]}`, "STOP", 200, true},
+		{"one TLDR line", `{"sufficient":true,"title":"日本語タイトル","tldr":["結論"],"points":["結論","理由"]}`, "STOP", 200, true},
 		{"too many", `{"sufficient":true,"points":["1","2","3","4","5","6"]}`, "STOP", 200, true},
 		{"blank", `{"sufficient":true,"points":[" "]}`, "STOP", 200, true},
 		{"truncated", `{"sufficient":true,"points":["途中"]}`, "MAX_TOKENS", 200, true},
@@ -24,11 +31,14 @@ func TestGeminiStructuredResponse(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/models/gemini-3.8-flash:generateContent" {
+				if r.URL.Path != "/v1/projects/test-project/locations/global/publishers/google/models/gemini-3.8-flash:generateContent" {
 					t.Errorf("path %s", r.URL.Path)
 				}
-				if r.Header.Get("x-goog-api-key") != "test-key" {
-					t.Error("missing key header")
+				if r.Header.Get("Authorization") != "Bearer test-token" {
+					t.Error("missing ADC bearer token")
+				}
+				if r.Header.Get("x-goog-api-key") != "" {
+					t.Error("API key header must not be sent")
 				}
 				var request map[string]any
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -38,17 +48,40 @@ func TestGeminiStructuredResponse(t *testing.T) {
 				if !ok || cfg["responseMimeType"] != "application/json" {
 					t.Error("missing schema config")
 				}
+				if schema, ok := cfg["responseJsonSchema"].(map[string]any); ok {
+					if properties, ok := schema["properties"].(map[string]any); !ok || properties["title"] == nil || properties["tldr"] == nil {
+						t.Error("response schema must request a title")
+					}
+				} else {
+					t.Error("missing response schema")
+				}
 				w.WriteHeader(tc.httpStatus)
 				json.NewEncoder(w).Encode(map[string]any{"candidates": []any{map[string]any{"finishReason": tc.finish, "content": map[string]any{"parts": []any{map[string]any{"text": "ignore thought", "thought": true}, map[string]string{"text": tc.output}}}}}})
 			}))
 			defer server.Close()
-			g := Gemini{Key: "test-key", Model: "gemini-3.8-flash", Endpoint: server.URL, Client: server.Client()}
-			points, err := g.Summarize(context.Background(), "title", "article body")
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("points=%v err=%v", points, err)
+			g := Gemini{
+				Project:     "test-project",
+				Location:    "global",
+				Model:       "gemini-3.8-flash",
+				TokenSource: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test-token"}),
+				Endpoint:    server.URL,
+				Client:      server.Client(),
 			}
-			if !tc.wantErr && len(points) != 2 {
-				t.Fatalf("points %v", points)
+			result, err := g.Summarize(context.Background(), "title", "article body", summary.Standard)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("result=%v err=%v", result, err)
+			}
+			if !tc.wantErr && len(result.Points) != 2 {
+				t.Fatalf("points %v", result.Points)
+			}
+			if !tc.wantErr && len(result.TLDR) != 3 {
+				t.Fatalf("TLDR: %v", result.TLDR)
+			}
+			if tc.name == "valid" && result.Title != "新しい技術の要点" {
+				t.Fatalf("title %q", result.Title)
+			}
+			if (tc.name == "invalid title" || tc.name == "long title") && result.Title != "" {
+				t.Fatalf("invalid title should fall back: %q", result.Title)
 			}
 		})
 	}

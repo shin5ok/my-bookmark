@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"my-bookmark/internal/content"
@@ -13,12 +14,15 @@ import (
 )
 
 type Page struct {
-	Title, Mode, Next, Error string
-	Session                  *store.Session
-	Entries                  []store.Entry
-	Comments                 []store.Bookmark
-	Detail                   bool
-	Status                   int
+	TokenSettings, TokenActive bool
+	APIEndpoint, IssuedToken   string
+	TokenExpires               time.Time
+	Title, Mode, Next, Error   string
+	Session                    *store.Session
+	Entries                    []store.Entry
+	Comments                   []store.Bookmark
+	Detail                     bool
+	Status                     int
 }
 
 func (a *App) render(w http.ResponseWriter, r *http.Request, status int, p Page) {

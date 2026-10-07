@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"my-bookmark/internal/iap"
 	"my-bookmark/internal/store"
 )
 
@@ -33,7 +34,7 @@ func testApp(t *testing.T) *App {
 }
 func TestProtectedRoutes(t *testing.T) {
 	a := testApp(t)
-	for _, path := range []string{"/bookmarks", "/bookmarks/abc/delete", "/articles/abc/summary", "/logout"} {
+	for _, path := range []string{"/bookmarks", "/bookmarks/abc/delete", "/articles/abc/summary", "/logout", "/settings/api/issue", "/settings/api/revoke"} {
 		r := httptest.NewRequest("POST", path, strings.NewReader("csrf=correct"))
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		w := httptest.NewRecorder()
@@ -81,8 +82,27 @@ func TestBookmarkInput(t *testing.T) {
 	}
 }
 func TestConfigRejectsUnsafeProduction(t *testing.T) {
-	c := Config{Env: "production", BaseURL: "http://localhost:8080", Project: "test", GoogleClientID: "id", GoogleClientSecret: "secret", GeminiKey: "key", GeminiModel: "gemini-3.8-flash"}
+	c := Config{Env: "production", BaseURL: "http://localhost:8080", Project: "test", GoogleClientID: "id", GoogleClientSecret: "secret", GeminiModel: "gemini-3.8-flash"}
 	if err := c.Validate(); err == nil {
 		t.Fatal("production accepted http")
+	}
+}
+
+func TestConfigAllowsProductionWithoutGeminiAPIKey(t *testing.T) {
+	t.Setenv("FIRESTORE_EMULATOR_HOST", "")
+	list, err := iap.ParseAllowlist([]byte("domains: [data-cloud.jp]"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Config{Env: "production", BaseURL: "https://bookmark.example", Project: "test", IAPAudience: "/projects/123/locations/asia-northeast1/services/shiori", IAPAllowlist: list, GeminiModel: "gemini-3.8-flash", GeminiLocation: "global"}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("production requires an API key: %v", err)
+	}
+}
+
+func TestProductionRequiresIAP(t *testing.T) {
+	c := Config{Env: "production", BaseURL: "https://bookmark.example", Project: "test", GoogleClientID: "id", GoogleClientSecret: "secret"}
+	if err := c.Validate(); err == nil {
+		t.Fatal("production accepted without IAP")
 	}
 }

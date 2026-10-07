@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"time"
+
+	"my-bookmark/internal/summary"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -22,6 +24,7 @@ type Article struct {
 	URL        string    `firestore:"url"`
 	Title      string    `firestore:"title"`
 	Domain     string    `firestore:"domain"`
+	TLDR       []string  `firestore:"tldr"`
 	Points     []string  `firestore:"points"`
 	Status     string    `firestore:"status"`
 	Model      string    `firestore:"model"`
@@ -36,15 +39,16 @@ type Article struct {
 	Sources    []string  `firestore:"sources"`
 }
 type SummaryJob struct {
-	ArticleID  string    `firestore:"article_id"`
-	UserID     string    `firestore:"user_id"`
-	Status     string    `firestore:"status"`
-	Stage      string    `firestore:"stage"`
-	QueuedAt   time.Time `firestore:"queued_at"`
-	Lease      string    `firestore:"lease"`
-	LeaseUntil time.Time `firestore:"lease_until"`
-	Attempts   int       `firestore:"attempts"`
-	LastError  string    `firestore:"last_error"`
+	Style      summary.Style `firestore:"style"`
+	ArticleID  string        `firestore:"article_id"`
+	UserID     string        `firestore:"user_id"`
+	Status     string        `firestore:"status"`
+	Stage      string        `firestore:"stage"`
+	QueuedAt   time.Time     `firestore:"queued_at"`
+	Lease      string        `firestore:"lease"`
+	LeaseUntil time.Time     `firestore:"lease_until"`
+	Attempts   int           `firestore:"attempts"`
+	LastError  string        `firestore:"last_error"`
 }
 type Bookmark struct {
 	ArticleID string    `firestore:"article_id"`
@@ -59,7 +63,15 @@ type Entry struct {
 	Article  Article
 	Bookmark *Bookmark
 }
+type APIToken struct {
+	User      User      `firestore:"user"`
+	Email     string    `firestore:"email"`
+	Hash      string    `firestore:"hash"`
+	ExpiresAt time.Time `firestore:"expires_at"`
+}
+
 type Session struct {
+	Email     string    `firestore:"email"`
 	User      User      `firestore:"user"`
 	CSRF      string    `firestore:"csrf"`
 	ExpiresAt time.Time `firestore:"expires_at"`

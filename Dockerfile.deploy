@@ -1,0 +1,11 @@
+FROM shiori-buildpack:latest AS app
+
+FROM chromedp/headless-shell:stable
+COPY --from=app /layers/google.go.build/bin/main /server
+COPY --from=app /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY allow_accounts.yaml /app/allow_accounts.yaml
+WORKDIR /app
+ENV PORT=8080 APP_ENV=production CHROME_BIN=/headless-shell/headless-shell HOME=/tmp XDG_CACHE_HOME=/tmp/.cache
+EXPOSE 8080
+USER 65532:65532
+ENTRYPOINT ["/server"]

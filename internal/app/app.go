@@ -18,11 +18,16 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"golang.org/x/oauth2"
 	"my-bookmark/internal/content"
+	"my-bookmark/internal/iap"
 	"my-bookmark/internal/store"
+	"my-bookmark/internal/summary"
 	"my-bookmark/internal/web"
 )
 
 type Database interface {
+	PutAPIToken(context.Context, store.APIToken) error
+	APIToken(context.Context, string) (store.APIToken, error)
+	DeleteAPIToken(context.Context, string) error
 	List(context.Context, string, string, string) ([]store.Entry, string, error)
 	Get(context.Context, string) (store.Article, error)
 	Own(context.Context, string, string) (*store.Bookmark, error)
@@ -31,7 +36,7 @@ type Database interface {
 	Comments(context.Context, string) ([]store.Bookmark, error)
 	Claim(context.Context, string, string) (string, error)
 	Finish(context.Context, string, string, string, []string, string, bool) error
-	Enqueue(context.Context, string, string) (string, error)
+	Enqueue(context.Context, string, string, summary.Style) (string, error)
 	Session(context.Context, string) (store.Session, error)
 	PutSession(context.Context, string, store.Session) error
 	DeleteSession(context.Context, string) error
@@ -39,16 +44,19 @@ type Database interface {
 	ConsumeOAuth(context.Context, string) (store.OAuthState, error)
 }
 type Summarizer interface {
-	Summarize(context.Context, string, string) ([]string, error)
+	Summarize(context.Context, string, string, summary.Style) (summary.Result, error)
 }
 type App struct {
-	cfg       Config
-	db        Database
-	summary   Summarizer
-	fetcher   *http.Client
-	templates *template.Template
-	oauth     *oauth2.Config
-	verifier  *oidc.IDTokenVerifier
+	cfg         Config
+	db          Database
+	summary     Summarizer
+	fetcher     *http.Client
+	templates   *template.Template
+	oauth       *oauth2.Config
+	verifier    *oidc.IDTokenVerifier
+	iapVerifier interface {
+		Verify(context.Context, string) (iap.Identity, error)
+	}
 }
 
 func New(cfg Config, db Database, summary Summarizer) (*App, error) {
@@ -58,15 +66,18 @@ func New(cfg Config, db Database, summary Summarizer) (*App, error) {
 			return raw
 		}
 		return u.Hostname()
-	}, "retryable": func(a store.Article) bool {
-		return a.Status == "pending" || a.Status == "failed" || a.Status == "processing" && !a.LeaseUntil.After(time.Now())
-	}}
+	}, "summaryState": summaryData}
 	tmpl, err := template.New("pages").Funcs(funcs).ParseFS(web.Files, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
 	a := &App{cfg: cfg, db: db, summary: summary, fetcher: content.NewFetcher(), templates: tmpl}
-	if cfg.GoogleClientID != "" {
+	if cfg.APIOnly {
+		return a, nil
+	}
+	if cfg.IAPAudience != "" {
+		a.iapVerifier = iap.NewVerifier(cfg.IAPAudience)
+	} else if cfg.GoogleClientID != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		provider, err := oidc.NewProvider(ctx, "https://accounts.google.com")
@@ -89,18 +100,28 @@ func (a *App) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.Recoverer, a.security)
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
+	if a.cfg.APIOnly || a.cfg.Env == "development" {
+		r.Post("/api/bookmarks", a.saveAPI)
+		r.Put("/api/bookmarks", a.saveAPI)
+	}
+	if a.cfg.APIOnly {
+		return r
+	}
 	static, _ := fs.Sub(web.Files, "static")
 	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
 	r.Group(func(r chi.Router) {
 		r.Use(a.withSession)
 		r.Get("/", a.feed)
 		r.Get("/mine", a.feed)
+		r.With(a.requireSession).Get("/settings/api", a.tokenSettings)
 		r.Get("/articles/{id}", a.detail)
 		r.Get("/articles/{id}/summary", a.summaryStatus)
 		r.Get("/auth/google", a.login)
 		r.Get("/auth/google/callback", a.callback)
 		r.Group(func(r chi.Router) {
 			r.Use(a.requireSession, a.csrf)
+			r.Post("/settings/api/issue", a.issueToken)
+			r.Post("/settings/api/revoke", a.revokeToken)
 			r.Post("/bookmarks", a.save)
 			r.Post("/bookmarks/{id}/delete", a.remove)
 			r.Post("/articles/{id}/summary", a.generate)
@@ -126,6 +147,43 @@ func (a *App) security(next http.Handler) http.Handler {
 }
 func (a *App) withSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.iapVerifier != nil {
+			identity, err := a.iapVerifier.Verify(r.Context(), r.Header.Get("X-Goog-IAP-JWT-Assertion"))
+			if err != nil {
+				http.Error(w, "IAP認証を確認できませんでした。", http.StatusUnauthorized)
+				return
+			}
+			if !a.cfg.IAPAllowlist.Allows(identity.Email) {
+				http.Error(w, "このアカウントにはアクセス権がありません。", http.StatusForbidden)
+				return
+			}
+			uid := store.Hash("https://accounts.google.com|" + identity.Subject)
+			if c, err := r.Cookie(a.cfg.cookieName()); err == nil && len(c.Value) <= 128 {
+				s, err := a.db.Session(r.Context(), c.Value)
+				if err == nil && s.User.ID == uid {
+					s.Email = identity.Email
+					next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionKey{}, &s)))
+					return
+				}
+				if err != nil && !errors.Is(err, store.ErrNotFound) {
+					a.fail(w, r, err)
+					return
+				}
+			}
+			key := store.RandomToken()
+			name, _, _ := strings.Cut(identity.Email, "@")
+			if len(name) > 80 {
+				name = name[:80]
+			}
+			s := store.Session{Email: identity.Email, User: store.User{ID: uid, Name: name}, CSRF: store.RandomToken(), ExpiresAt: time.Now().Add(7 * 24 * time.Hour)}
+			if err := a.db.PutSession(r.Context(), key, s); err != nil {
+				a.fail(w, r, err)
+				return
+			}
+			a.cookie(w, a.cfg.cookieName(), key, 7*24*3600)
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionKey{}, &s)))
+			return
+		}
 		if c, err := r.Cookie(a.cfg.cookieName()); err == nil && len(c.Value) <= 128 {
 			s, err := a.db.Session(r.Context(), c.Value)
 			if err == nil {

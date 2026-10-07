@@ -1,19 +1,19 @@
 # しおり — AI要約つきブックマーク
 
-Go + chiで作る、はてなブックマーク風の公開ブックマークサービスです。記事の要約を最大5つの日本語箇条書きで一覧に常時表示します。PC・モバイル対応。
+Go + chiで作る、IAPで保護されたブックマークサービスです。記事の要約を最大5つの日本語箇条書きで一覧に常時表示します。PC・モバイル対応。
 
 - 新着・人気順、マイブックマーク、記事詳細と公開コメント
 - URL保存・削除、コメント・タグ編集
-- Google OAuth / OpenID Connectのみのログイン
+- 本番はCloud Run IAP、ローカル開発はGoogle OAuth / OpenID Connectでログイン
 - Gemini 3.8 Flashによる記事要約、関連ページ補足、進捗表示、手動再試行
-- Cloud Run + Firestore、Secret Manager
+- Cloud Run + Firestore、Identity-Aware Proxy
 
 ## 必要なもの
 
 - Go 1.26.8（`go.mod`のtoolchain指定で自動取得）
 - Docker / Docker Compose（`docker-compose`コマンド。必要なら`docker compose`に読み替え）
-- 本番構築にはGoogle Cloud CLI、課金を有効にしたGCPプロジェクト
-- Google OAuthのWebクライアント、Gemini APIキー
+- 本番構築にはGoogle Cloud CLI、`jq`、課金を有効にしたGCPプロジェクト
+- ローカル用Google OAuthのWebクライアント、Gemini用のApplication Default Credentials（ADC）
 
 ## ローカル起動
 
@@ -23,7 +23,7 @@ make emulator
 make dev
 ```
 
-http://localhost:8080 を開きます。認証情報なしでも空の公開一覧は表示できます。保存・編集・要約を使うには、`.env`のGoogle OAuth設定とGeminiキーを入力してください。認証を迂回する開発ログインはありません。
+ローカルでは先に `gcloud auth application-default login` を実行します。http://localhost:8080 を開きます。保存・編集には`.env`のGoogle OAuth設定、要約にはADCが必要です。認証を迂回する開発ログインはありません。
 
 Google Cloud Consoleの「Google Auth Platform」で同意画面と**ウェブアプリケーション**のOAuthクライアントを設定し、以下を承認済みリダイレクトURIに登録します。
 
@@ -33,7 +33,7 @@ http://localhost:8080/auth/google/callback
 
 テスト公開中のOAuthアプリでは、ログインするGoogleアカウントをテストユーザーに追加します。スコープは`openid profile`のみ。Googleの表示名は公開ブックマーク・コメントに表示されます。
 
-Gemini APIキーはGoogle AI Studioで取得し、`GEMINI_API_KEY`に設定します。モデルの既定値は`gemini-3.8-flash`です。本文を取得してGemini APIへ送信します。本文全体はFirestoreに保存しません。
+GeminiはVertex AI経由で呼び出し、APIキーは使用しません。ADCのプロジェクトにはVertex AI APIとモデル利用権限が必要です。モデルの既定値は`gemini-3.8-flash`、ロケーションは`global`で、`GEMINI_MODEL`と`GEMINI_LOCATION`で変更できます。本文全体はFirestoreに保存しません。
 
 `.env`はシェル形式です。特殊文字を含む値は単一引用符で囲み、信頼できる内容だけを記述してください。Git・Docker・Cloud Buildの送信対象から除外しています。
 
@@ -52,32 +52,32 @@ make preview            # localhost:8090、架空記事による画面確認の�
 
 ## Cloud Runへデプロイ
 
-`.env`に実際の`PROJECT_ID`とGoogle OAuth/Geminiの値を設定します。`GOOGLE_CLOUD_PROJECT=demo-bookmark`はローカル用のままで構いません。本番の値はdeployスクリプトが設定します。
+`.env`の`PROJECT_ID`と`GOOGLE_CLOUD_PROJECT`を、Vertex AIを有効化する実際の同一GCPプロジェクトに設定します。本番の`GOOGLE_CLOUD_PROJECT`はdeployスクリプトが`PROJECT_ID`から設定します。
+
+本番でログインを許可するアカウントをルートの`allow_accounts.yaml`に記入します。`accounts`には個別のメールアドレス、`domains`にはGoogle Workspace / Cloud Identityドメインを書きます。実際の許可対象はこのファイルの内容で決まります。ファイルが空または不正ならデプロイまたはサーバー起動が失敗します。
+
+```yaml
+accounts:
+  - reader@example.com
+domains:
+  - data-cloud.jp
+```
 
 ```bash
 gcloud auth login
 make bootstrap
-make url
-```
-
-`make bootstrap`はAPI、Firestore Nativeの`(default)` DB、専用の実行・ビルドサービスアカウント、空のSecret、TTL、複合インデックスを作成します。初回実行者にはAPI有効化、DB・サービスアカウント・Secret作成、IAM設定の権限が必要です。リージョンの既定値は東京`asia-northeast1`です。既存DBは変更しません。DBのロケーションは作成後に変更できないため、`.env`の`REGION`を初期構築前に設定してください。
-
-`make url`に表示される以下の形式のURIを、Google OAuthの承認済みリダイレクトURIに追加します。
-
-```text
-https://SERVICE-PROJECT_NUMBER.REGION.run.app/auth/google/callback
-```
-
-```bash
-make secrets
 make deploy
 ```
 
-`make secrets`は`.env`の2つの秘密値をSecret Managerへ新しいバージョンとして登録します。`make deploy`はテスト・静的解析・ローカルビルド後、DockerfileをCloud Buildでビルドし、Chromiumを含むコンテナをCloud Runへ反映します。ソースデプロイするユーザーにはCloud Run Source Developer、Service Usage Consumer、実行・ビルドサービスアカウントへのService Account User等の権限が必要です。公開サービスのIAM設定には追加権限が必要になる場合があります。
+`make bootstrap`はAPI（IAPを含む）、Firestore Nativeの`(default)` DB、専用の実行・ビルドサービスアカウント、TTL、複合インデックスを作成し、実行サービスアカウントへFirestoreとVertex AIの権限を付与します。リージョンの既定値は東京`asia-northeast1`です。既存DBは変更しません。DBのロケーションは作成後に変更できません。
 
-Cloud Runは **1つのService** に限定し、HTTPアプリとFirestoreジョブワーカーを同じGoプロセスで動かします。既定は常時CPU割り当て（instance-based billing）、min 1 / max 3インスタンス、2 CPU、2 GiB、リクエスト300秒。min 1の待機時間も課金対象になるため、料金は [Cloud Run billing settings](https://docs.cloud.google.com/run/docs/configuring/billing-settings) を参照してください。公開一覧のためCloud Run自体は公開し、書き込みはアプリ内でGoogleログイン・CSRF検証を要求します。実行サービスアカウントにはFirestoreの`roles/datastore.user`と、このアプリの2つのSecretだけの読取権限を付与します。
+`make deploy`はテスト・静的解析後にイメージを構築し、Cloud Runを`--iap --no-allow-unauthenticated`で更新します。IAPサービスエージェントへCloud Run Invokerを付与し、`allow_accounts.yaml`からサービス単位のIAPアクセス権を同期します。既存の同ロールの許可は置き換え、他のロールは保持します。アプリもIAP署名付きJWTを毎回検証し、許可リストと照合します。デプロイ実行者にはCloud Build、Cloud Run、IAPポリシーを更新する権限が必要です。
 
-インデックスの作成は非同期です。`gcloud firestore indexes composite list --project=PROJECT_ID`で全て`READY`になってから利用してください。独自ドメインを設定済みなら`.env`に`DEPLOY_BASE_URL=https://your-domain.example`を設定し、OAuth URIも合わせます。
+Cloud Runの画面用Serviceでは、HTTPアプリとFirestoreジョブワーカーを同じGoプロセスで動かします。既定は常時CPU割り当て（instance-based billing）、min 1 / max 3インスタンス、1 CPU、2 GiB、リクエスト300秒。API専用Serviceも1 CPUです。min 1の待機時間も課金対象になるため、料金は [Cloud Run billing settings](https://docs.cloud.google.com/run/docs/configuring/billing-settings) を参照してください。実行サービスアカウントには`roles/datastore.user`と`roles/aiplatform.user`を付与します。
+
+IAPのGoogle管理OAuthクライアントは通常、同一組織内のユーザー向けです。プロジェクトが`data-cloud.jp`と別組織にある場合、[Cloud Run IAPの外部ユーザー設定](https://docs.cloud.google.com/run/docs/securing/identity-aware-proxy-cloud-run)に従いカスタムOAuthクライアントを構成してください。IAMの`domain:`許可はWorkspaceの顧客IDで評価されるため、セカンダリドメインにも及び得ます。アプリはJWTのメールアドレスが`@data-cloud.jp`に一致するかを別途検査します。
+
+インデックスの作成は非同期です。`gcloud firestore indexes composite list --project=PROJECT_ID`で全て`READY`になってから利用してください。独自ドメインを設定済みなら`.env`に`DEPLOY_BASE_URL=https://your-domain.example`を設定します。
 
 FirestoreへはサーバーSDKとIAMでアクセスします。ブラウザー用Firebase SDKは使用しません。`firestore.rules`はブラウザーからのアクセスを全面拒否する参考設定です。既存のFirebaseプロジェクトへ導入する場合は既存ルールを確認し、意図せず公開しないでください。
 
@@ -85,7 +85,8 @@ FirestoreへはサーバーSDKとIAMでアクセスします。ブラウザー�
 
 ```text
 cmd/server/          HTTPサーバー・起動と終了
-internal/app/        chiルート、Google認証、CSRF、画面と要約の制御
+internal/app/        chiルート、IAP/ローカルGoogle認証、CSRF、画面と要約の制御
+internal/iap/        許可リスト、IAP署名検証、ポリシー同期
 internal/store/      Firestoreのトランザクション、セッション、生成制限
 internal/content/    公開URLの安全な取得、本文抽出、Gemini API
 internal/web/        Goに埋め込むテンプレート・CSS・JavaScript
@@ -107,7 +108,7 @@ scripts/             初期構築、Secret登録、インデックス、デプ�
 
 ## 確認する項目
 
-実環境の資格情報を設定後、Googleログイン→URL保存→要約→編集→削除→ログアウトを確認してください。OAuth同意画面の公開設定、モデル利用可否、請求・クォータは利用プロジェクトに依存します。秘密値をIssueやチャットへ貼り付ける必要はありません。
+実環境で許可アカウントのアクセス、許可外アカウントの拒否、URL保存→要約→編集→削除を確認してください。IAPの設定、モデル利用可否、請求・クォータは利用プロジェクトに依存します。IAPログアウト後もGoogle側のセッションが有効なら自動で再ログインする場合があります。
 
 ## 実装確認
 
@@ -116,3 +117,93 @@ scripts/             初期構築、Secret登録、インデックス、デプ�
 実際のGoogleログイン・Gemini API呼び出し・Cloud Build/Cloud Runデプロイは利用者のプロジェクトと資格情報が必要なため未実施です。
 
 参考: [Gemini 3.8 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash)、[構造化出力](https://ai.google.dev/gemini-api/docs/structured-output)、[Cloud Runのソースデプロイ](https://cloud.google.com/run/docs/deploying-source-code)。
+
+## 専用トークンでURLを登録するAPI
+
+ログイン後、サイドバーの **APIトークン** を開き「トークンを発行」を押します。
+トークンは発行直後に一度だけ表示され、90日間有効です。1ユーザーにつき1つで、
+再発行すると旧トークンが無効になります。「トークンを失効」でも停止できます。
+Firestoreの `api_tokens` にはトークンのSHA-256ハッシュ・所有者・メールアドレス・有効期限を保存し、平文トークンは保存しません。
+
+画面に表示されるAPIエンドポイントに、クエリパラメータ `token` を付けて送信します。
+`SHIORI_TOKEN` は発行したトークン、`SHIORI_API_URL` は画面のAPIエンドポイントです。
+
+```bash
+curl --request POST "${SHIORI_API_URL}?token=${SHIORI_TOKEN}" \
+  --header 'Content-Type: application/json' \
+  --data '{"url":"https://example.com/article","comment":"あとで読む","tags":["技術","Go"]}'
+```
+
+`--request PUT` でも同じ形式を使えます。URLだけなら `{"url":"https://example.com/article"}` で登録できます。
+どちらも正規化したURLをキーに、トークン所有者のブックマークを登録・更新します。
+同じURLの再送で登録件数は増えません。コメント・タグは置き換え、省略した場合は空になります。
+新しい記事は既存の要約キューに入り、要約は非同期で作成されます（既存の利用上限も適用）。
+GETでは登録できません。CookieではAPI認証できません。
+
+成功時はHTTP 200のJSONです。
+
+```json
+{"id":"記事ID","url":"https://example.com/article","title":"example.com","status":"queued","article_url":"https://画面のホスト/articles/記事ID"}
+```
+
+エラーは `{"error":"説明"}` を返します。400は入力不正、401は未指定・無効・期限切れトークン、
+403は許可されていないアカウント、415はJSON以外、429は利用上限、503は保存先の一時エラーです。
+コメントは500文字、タグは5つまで・各24文字、リクエスト本文は16KiBまでです。
+
+### 本番デプロイ
+
+`make deploy` は同じイメージから2つのCloud Runサービスを構築します。
+
+- `${SERVICE}`：IAPで保護した画面。トークンの発行・失効はログインとCSRF検証が必要です。
+- `${SERVICE}-api`：`API_ONLY=true` のAPI専用サービス。Cloud Runの入口は公開し、アプリで専用トークンを検証します。画面・OAuth・トークン発行ルートは公開しません。要約ワーカーは画面側で動きます。
+
+API側でも `allow_accounts.yaml` のメールアドレス／ドメインを毎リクエスト照合します。
+許可リストの変更は両サービスへ再デプロイしてください。APIのURLは画面サービスの `API_BASE_URL` に自動設定されます。
+追加のサービスが作られるため、デプロイにはCloud Runの公開設定とCloud Loggingのsink更新権限が必要です。
+
+URLに認証情報が含まれるため、デプロイスクリプトはAPI公開前に `_Default` sinkへ
+APIサービスのCloud Runリクエストログ除外を追加します（再デプロイ時は更新）。
+独自sink・組織の集約sink・外部プロキシがある場合は、それらにも同様の除外／クエリ秘匿設定が必要です。
+アプリのレスポンスは `Cache-Control: no-store`、トークン画面は `Referrer-Policy: same-origin`、APIは `Referrer-Policy: no-referrer` を返します。
+トークン画面では同一サイトのフォーム送信に必要なOriginを保持し、外部へのReferer送信を抑止します。
+トークン付きURLをブラウザのアドレス欄・共有メッセージに貼り付けず、クライアント側でもURLをログに残さないでください。
+
+ローカル開発では通常のサービスが `/api/bookmarks` も提供し、API用の別プロセスは不要です。
+
+### APIが401を返す場合
+
+認証エラーは `error` に加え、`code` と日本語の `message` を返します。
+
+- `token_missing`：URLの `token` パラメータがない、または空です。
+- `token_ambiguous`：`token` パラメータが複数あります。
+- `token_malformed`：コピーした値が所定の形式ではありません。トークンは108文字（64文字のID、ドット、43文字の秘密値）です。
+- `token_invalid`：現在のトークンと一致しません。発行元のAPIエンドポイントと最新のトークンを確認してください。再発行・失効すると旧トークンは使えません。
+- `token_expired`：一致したトークンの有効期限が切れています。画面から再発行してください。
+
+再発行後はcurlに指定する値も置き換えてください。エラーを共有する際はトークン本体を伏せ、`code` と `message` のみ共有してください。
+
+シェル変数でトークンを渡す場合、URLはダブルクォートで囲んでください。
+シングルクォート内の `$SHIORI_API_TOKEN` は展開されず、変数名がそのまま送信されます。
+
+```bash
+curl -X POST "https://APIホスト/api/bookmarks?token=${SHIORI_API_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com/article"}'
+```
+
+発行直後の画面にはトークン全体と、発行した値を埋め込んだcurlをコピーするボタンがあります。
+APIはコピー時に付いた前後の空白・改行を除去してから検証します（内部の文字は変更しません）。
+
+初回のURL登録時も、要約完了時にAIが生成した簡潔な日本語タイトルへ更新します。生成タイトルが得られない場合は、取得元の記事タイトルを使用します。
+
+## TL;DRと具体的な要約
+
+新規登録・標準の再試行は「具体的に」と同じ指示で要約します。
+簡潔な日本語タイトルの下に、結論・重要性・影響を伝えるTL;DRを原則3つの短文で表示します。
+内容に応じて2〜5文とし、各文は100文字以内。スマホでの折り返しは許容し、文章は途中で切りません。
+一覧ではTL;DRを短い箇条書きで表示します。「要約を読む」を押すと、そのエントリー内で要約本文を開閉できます。画面遷移はありません。
+本文では数値・事例・手順・注意点を確認できます。
+
+再生成ではタイトル・TL;DR・要約本文をまとめて更新し、失敗した場合は以前の内容を保持します。
+TL;DRのない既存記事も要約本文は折りたたんで表示し、新規登録または手動再生成から適用します。
+既存記事の一括再生成は行いません。

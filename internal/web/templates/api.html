@@ -1,0 +1,18 @@
+{{define "api-settings"}}
+<section class="api-settings">
+<div class="page-heading"><div><h1>APIトークン</h1><p class="intro">外部ツールから、自分のブックマークにURLを保存できます。</p></div></div>
+<p>トークンは1ユーザーにつき1つ、有効期限は90日です。再発行すると以前のトークンは使えなくなります。</p>
+{{if .TokenActive}}<p>有効期限：{{date .TokenExpires}}</p>{{else}}<p>有効なトークンはありません。</p>{{end}}
+{{if .IssuedToken}}<div class="bookmark-form"><label>発行したトークン（この画面で一度だけ表示）<input id="api-token" type="text" readonly value="{{.IssuedToken}}" autocomplete="off" spellcheck="false"></label><button type="button" class="button secondary" data-copy-target="api-token">トークン全体をコピー</button><p>108文字すべてをコピーして保管してください（ドットの前後を含みます）。</p></div>{{end}}
+<form action="/settings/api/issue" method="post"><input type="hidden" name="csrf" value="{{.Session.CSRF}}"><button type="submit" class="button">{{if .TokenActive}}トークンを再発行{{else}}トークンを発行{{end}}</button></form>
+{{if .TokenActive}}<form action="/settings/api/revoke" method="post" class="delete-form"><input type="hidden" name="csrf" value="{{.Session.CSRF}}"><button type="submit" class="danger-button">トークンを失効</button></form>{{end}}
+<h2>URLを登録する</h2>
+{{if .APIEndpoint}}<div class="bookmark-form"><label>APIエンドポイント<input type="text" readonly value="{{.APIEndpoint}}"></label></div>
+<pre class="api-example"><code id="api-command">curl -X POST '{{.APIEndpoint}}?token={{if .IssuedToken}}{{.IssuedToken}}{{else}}YOUR_TOKEN{{end}}' \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com/article","tags":["技術"]}'</code></pre>{{if .IssuedToken}}<button type="button" class="button secondary" data-copy-target="api-command">トークン入りcurlをコピー</button>{{end}}
+{{else}}<p>APIエンドポイントはデプロイ後に表示されます。</p>{{end}}
+<p>PUTでも同じ形式で登録できます。同じURLは重複登録せず、コメント・タグを更新します。省略したコメント・タグは空になります。GETでは登録できません。</p>
+<p class="small-note">トークン付きURLは共有しないでください。外部ツールの履歴やログにも残さないようにしてください。</p>
+</section>
+{{end}}

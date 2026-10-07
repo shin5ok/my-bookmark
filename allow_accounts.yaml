@@ -1,0 +1,7 @@
+# Google accounts allowed to use the IAP-protected service.
+# Add individual addresses under accounts; domains allow all Workspace users.
+accounts: []
+domains:
+  - data-cloud.jp
+  - 55mp.com
+  - uname.link
