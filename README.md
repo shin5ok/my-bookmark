@@ -2,11 +2,43 @@
 
 Go + chiで作る、IAPで保護されたブックマークサービスです。記事の要約を最大5つの日本語箇条書きで一覧に常時表示します。PC・モバイル対応。
 
-- 新着・人気順、マイブックマーク、記事詳細と公開コメント
+- 新着・星の合計による人気順、マイブックマーク、未理解だけを表示する「まだ」、記事詳細と公開コメント
+- 自分のブックマークを5段階の星で評価・変更・解除
 - URL保存・削除、コメント・タグ編集
 - 本番はCloud Run IAP、ローカル開発はGoogle OAuth / OpenID Connectでログイン
-- Gemini 3.8 Flashによる記事要約、関連ページ補足、進捗表示、手動再試行
+- Gemini 3.8 Flashによる記事・YouTube動画の要約、関連ページ補足、進捗表示、手動再試行
+- Cloud Tasksと専用Cloud Runワーカーによる非同期要約
 - Cloud Run + Firestore、Identity-Aware Proxy
+
+## 理解状態と星評価
+
+マイブックマークのサブメニュー「まだ」は、自分がまだ理解済みにしていない記事だけを新着順で表示します。理解状態が未保存の古いブックマークも対象です。「理解した」を押すと「まだ」から外れます。通常の一覧ではタイトルだけに折りたたまれ、タイトルを押すと展開し、「✓ 理解済み」を押すと解除できます。
+
+保存したブックマークは星1〜5個で評価でき、「解除」で未評価（0）に戻せます。星はユーザーごとに保存され、人気一覧は全ユーザーの星の合計が多い順です。同点は記事IDの降順で安定させます。評価の変更・解除・ブックマーク削除は合計にも反映されます。カードの「⭐ 数値」は記事全体の星の合計、「あなたの評価」は自分の星です。
+
+既存環境への初回導入は、デプロイ前に次を実行してください。
+
+```bash
+make indexes           # active + rating_total のインデックスを作成
+make migrate-ratings   # 既存記事の rating_total を0で初期化
+make deploy
+```
+
+Firestoreのインデックスが利用可能になってからデプロイしてください。`make migrate-ratings`は`.env`の`PROJECT_ID`とADCを使い、ローカルEmulatorの設定を外して実行します。既存の星合計は変更せず、再実行できます。初期化前の古い記事は、Firestoreの並べ替え対象に含まれないため人気一覧に表示されません。「まだ」は保存日時順にページを読み進めて絞り込み、1ページ最大20件を表示するため、理解済み記事が多いと追加の読み取りが発生します。
+
+## YouTube動画と非同期要約
+
+公開YouTube動画の `watch?v=...`、`youtu.be/...`、`shorts/...`、`live/...`、`embed/...` を保存すると、映像・音声から日本語タイトル・TL;DR・要約を生成します。時刻指定や共有用パラメータは動画入力から除き、動画全体を要約します。チャンネルや再生リストには対応していません。視聴制限やモデル側の制約で読めない場合は失敗理由を表示します。
+
+本番の処理は「保存 → Firestoreの待機ジョブ → Cloud Tasks → 専用Cloud Runワーカー → Firestoreへ結果保存」です。ブラウザとトークンAPIは保存後すぐに応答し、画面は既存の進捗取得で結果を更新します。画面用サービスの常駐処理は2秒ごとに待機ジョブをCloud Tasksへ送信します。この送信処理のため、画面用サービスは引き続き `--min=1 --no-cpu-throttling` が必要です。タスク登録に失敗したジョブはFirestoreに残り、次回の送信対象になります。
+
+タスク名は記事IDと依頼時刻から決定し、登録の再試行を重複排除します。ワーカーはFirestoreトランザクションで11分の実行権を取得し、古い依頼・完了済み・キャンセル済みの配信を無視します。処理は9分、動画へのGemini呼び出しは8分、Cloud TasksのHTTP期限は10分、Cloud Runの期限は11分です。429・5xx・通信障害は最大3回の要約実行まで再試行し、その後は失敗を表示します。保存障害や稼働中の重複配信は非2xxで返し、Cloud Tasksが再配信します。プロセス停止時は実行権の期限切れ後に再開できます。
+
+Cloud Tasksは同時実行3件、毎秒1件、再試行間隔30〜600秒です。インフラ障害での再配信に回数上限は設けません（Cloud Tasks自体の保持期限は適用されます）。専用ワーカーは `WORKER_ONLY=true`、最小0インスタンスで稼働し、Cloud Run IAMが `${SERVICE}-tasks` サービスアカウントのOIDC認証を検証します。タスク用エンドポイントを画面用サービスや公開トークンAPIに追加しません。
+
+既存環境への導入は `make bootstrap` → `make deploy` の順です。bootstrapはCloud Tasks API、タスク呼び出し用サービスアカウント、実行用アカウントの `roles/cloudtasks.enqueuer` と呼び出し用アカウントに対する `roles/iam.serviceAccountUser` を設定します。deployはキューと専用ワーカー、ワーカーへの `roles/run.invoker` を設定してから画面用サービスを更新します。既存のFirestoreインデックスを利用します。ローカル開発は `TASKS_*` を空欄にして従来の直接実行を使えます。
+
+動画の入力形式は[Google公式サンプル](https://cloud.google.com/vertex-ai/generative-ai/docs/samples/googlegenaisdk-textgen-with-youtube-video)、非同期配信は[Cloud TasksのHTTPタスク](https://cloud.google.com/tasks/docs/creating-http-target-tasks)に準拠しています。
 
 ## 必要なもの
 
@@ -39,6 +71,8 @@ GeminiはVertex AI経由で呼び出し、APIキーは使用しません。ADC�
 
 ```bash
 make help               # コマンド一覧
+make apis               # 必要なGoogle Cloud APIを有効化
+make migrate-ratings    # 既存記事の星合計を初期化（デプロイ先・ADC）
 make fmt                # 整形
 make test               # race検出つき単体テスト
 make vet                # 静的解析
@@ -68,6 +102,8 @@ gcloud auth login
 make bootstrap
 make deploy
 ```
+
+`make apis`は`.env`の`PROJECT_ID`を対象に、Cloud Run・Firestore・Cloud Build・Artifact Registry・Secret Manager・IAM・Vertex AI・IAP・Cloud TasksのAPIを有効化します。有効済みのAPIはスキップします。`make bootstrap`と`make deploy`からも自動実行します。
 
 `make bootstrap`はAPI（IAPを含む）、Firestore Nativeの`(default)` DB、専用の実行・ビルドサービスアカウント、TTL、複合インデックスを作成し、実行サービスアカウントへFirestoreとVertex AIの権限を付与します。リージョンの既定値は東京`asia-northeast1`です。既存DBは変更しません。DBのロケーションは作成後に変更できません。
 

@@ -67,9 +67,18 @@ func wait(ctx context.Context, d time.Duration) bool {
 	}
 }
 func (w *Worker) process(parent context.Context, id, lease string, style summary.Style) {
+	if err := w.processAttempt(parent, id, lease, style, false); err != nil {
+		slog.Error("summary processing failed", "article", id, "error", err)
+	}
+}
+
+func (w *Worker) processAttempt(parent context.Context, id, lease string, style summary.Style, retryTransient bool) error {
 	ctx, cancel := context.WithTimeout(parent, 9*time.Minute)
 	defer cancel()
 	article, err := w.db.Get(ctx, id)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
 	var points []string
 	var tldr []string
 	title := ""
@@ -80,6 +89,30 @@ func (w *Worker) process(parent context.Context, id, lease string, style summary
 		failure = "記事を読み込めませんでした。"
 	} else if !article.Active || article.Count == 0 {
 		failure = "この記事はブックマークされていません。"
+	} else if videoURL, isVideo, videoErr := content.YouTubeURL(article.URL); isVideo {
+		sources = []string{article.URL}
+		if videoErr != nil {
+			failure = videoErr.Error()
+		} else {
+			sources = []string{videoURL}
+			video, supported := w.summary.(interface {
+				SummarizeVideo(context.Context, string, summary.Style) (summary.Result, error)
+			})
+			if !supported {
+				failure = "動画の要約が設定されていません。"
+			} else if err = w.stage(ctx, id, lease, "summarizing", "動画の映像と音声から要点をまとめています", sources); err != nil {
+				return err
+			} else {
+				var result summary.Result
+				result, err = video.SummarizeVideo(ctx, videoURL, style)
+				points, generatedTitle, tldr = result.Points, result.Title, result.TLDR
+				if err != nil {
+					failure = "動画を要約できませんでした。公開状態・視聴制限を確認し、時間をおいて再試行してください。"
+				} else if content.ValidateSummary(points) != nil || content.ValidateTLDR(tldr) != nil {
+					failure = "動画の内容を十分に確認できず、要約を作成できませんでした。"
+				}
+			}
+		}
 	} else {
 		var doc content.Document
 		doc, err = content.FetchDocument(ctx, w.fetcher, article.URL)
@@ -90,7 +123,7 @@ func (w *Worker) process(parent context.Context, id, lease string, style summary
 			sources = []string{doc.URL}
 			if len([]rune(doc.Text)) >= 1200 {
 				if e := w.stage(ctx, id, lease, "summarizing", "記事の要点を確認しています", sources); e != nil {
-					failure = "要約を中断しました。"
+					return e
 				} else {
 					var result summary.Result
 					result, err = w.summary.Summarize(ctx, title, doc.Text, style)
@@ -102,7 +135,7 @@ func (w *Worker) process(parent context.Context, id, lease string, style summary
 			}
 			if failure == "" && len(points) == 0 {
 				if err = w.stage(ctx, id, lease, "rendering", "ページを描画して本文を確認しています", sources); err != nil {
-					failure = "要約を中断しました。"
+					return err
 				} else {
 					rendered, e := w.renderer.Render(ctx, doc.HTML, doc.URL)
 					if e != nil {
@@ -125,8 +158,7 @@ func (w *Worker) process(parent context.Context, id, lease string, style summary
 							break
 						}
 						if e := w.stage(ctx, id, lease, "following_links", fmt.Sprintf("関連ページを確認しています（%d/%d）", i+1, len(links)), append(append([]string(nil), sources...), link.URL)); e != nil {
-							failure = "要約処理が中断されました。"
-							break
+							return e
 						}
 						childCtx, childCancel := context.WithTimeout(ctx, 12*time.Second)
 						child, e := content.FetchDocument(childCtx, w.fetcher, link.URL)
@@ -143,7 +175,7 @@ func (w *Worker) process(parent context.Context, id, lease string, style summary
 					if failure == "" {
 						input := content.TruncateText(combined.String(), 24000)
 						if e := w.stage(ctx, id, lease, "summarizing", "記事と関連ページから要点をまとめています", sources); e != nil {
-							failure = "要約処理が中断されました。"
+							return e
 						} else {
 							var result summary.Result
 							result, err = w.summary.Summarize(ctx, title, input, style)
@@ -163,6 +195,12 @@ func (w *Worker) process(parent context.Context, id, lease string, style summary
 			}
 		}
 	}
+	if retryTransient && (content.Retryable(err) || ctx.Err() != nil) {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
 	if ctx.Err() != nil && failure == "" {
 		failure = "要約処理が中断されました。"
 	}
@@ -177,11 +215,12 @@ func (w *Worker) process(parent context.Context, id, lease string, style summary
 		if !errors.Is(e, store.ErrBusy) {
 			slog.Error("summary result could not be saved", "article", id, "error", e)
 		}
-		return
+		return e
 	}
 	if failure != "" {
 		slog.Warn("summary job failed", "article", id, "stage", failure)
 	}
+	return nil
 }
 func (w *Worker) stage(ctx context.Context, id, lease, stage, progress string, sources []string) error {
 	return w.db.UpdateStage(ctx, id, lease, stage, progress, sources)

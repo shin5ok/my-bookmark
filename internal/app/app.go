@@ -34,6 +34,7 @@ type Database interface {
 	Save(context.Context, store.User, string, string, []string) (store.Article, error)
 	Delete(context.Context, string, string) error
 	SetUnderstood(context.Context, string, string, bool) error
+	SetRating(context.Context, string, string, int) (int64, error)
 	Comments(context.Context, string) ([]store.Bookmark, error)
 	Claim(context.Context, string, string) (string, error)
 	Finish(context.Context, string, string, string, []string, string, bool) error
@@ -61,7 +62,7 @@ type App struct {
 }
 
 func New(cfg Config, db Database, summary Summarizer) (*App, error) {
-	funcs := template.FuncMap{"join": strings.Join, "date": func(t time.Time) string { return t.In(time.FixedZone("JST", 9*3600)).Format("2006.01.02") }, "host": func(raw string) string {
+	funcs := template.FuncMap{"stars": func() []int { return []int{1, 2, 3, 4, 5} }, "join": strings.Join, "date": func(t time.Time) string { return t.In(time.FixedZone("JST", 9*3600)).Format("2006.01.02") }, "host": func(raw string) string {
 		u, err := url.Parse(raw)
 		if err != nil {
 			return raw
@@ -126,6 +127,7 @@ func (a *App) Handler() http.Handler {
 			r.Post("/bookmarks", a.save)
 			r.Post("/bookmarks/{id}/delete", a.remove)
 			r.Post("/bookmarks/{id}/understood", a.setUnderstood)
+			r.Post("/bookmarks/{id}/rating", a.setRating)
 			r.Post("/articles/{id}/summary", a.generate)
 			r.Post("/logout", a.logout)
 		})

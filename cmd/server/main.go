@@ -41,23 +41,39 @@ func run() error {
 	}
 	var summarizer app.Summarizer = &content.Gemini{Project: cfg.Project, Location: cfg.GeminiLocation, Model: cfg.GeminiModel, TokenSource: tokenSource}
 	database := store.New(db)
-	application, err := app.New(cfg, database, summarizer)
-	if err != nil {
-		return err
+	worker := app.NewWorker(database, summarizer, cfg.GeminiModel)
+	var handler http.Handler
+	if cfg.WorkerOnly {
+		handler = app.TaskHandler(database, worker)
+	} else {
+		application, err := app.New(cfg, database, summarizer)
+		if err != nil {
+			return err
+		}
+		handler = application.Handler()
 	}
 	workerDone := make(chan struct{})
-	worker := app.NewWorker(database, summarizer, cfg.GeminiModel)
 	go func() {
 		defer close(workerDone)
-		if !cfg.APIOnly {
+		if cfg.WorkerOnly || cfg.APIOnly {
+			return
+		}
+		if cfg.TasksQueue != "" {
+			publisher := &app.CloudTasks{Queue: cfg.TasksQueue, WorkerURL: cfg.TasksWorkerURL, ServiceAccount: cfg.TasksServiceAccount, TokenSource: tokenSource}
+			app.RunDispatcher(ctx, database, publisher)
+		} else {
 			worker.Run(ctx)
 		}
 	}()
+	writeTimeout := 100 * time.Second
+	if cfg.WorkerOnly {
+		writeTimeout = 610 * time.Second
+	}
 	addr := ":" + cfg.Port
 	if cfg.Env == "development" {
 		addr = "127.0.0.1:" + cfg.Port
 	}
-	server := &http.Server{Addr: addr, Handler: application.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 100 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+	server := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: writeTimeout, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	done := make(chan error, 1)
 	go func() { slog.Info("listening", "address", addr); done <- server.ListenAndServe() }()
 	select {

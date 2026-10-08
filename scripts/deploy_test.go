@@ -50,6 +50,18 @@ if [[ "$1 $2 $3" == 'artifacts repositories describe' && "${MISSING_REPO:-}" == 
 		t.Fatal(err)
 	}
 	calls := string(data)
+	workerDeploy := strings.Index(calls, "run deploy shiori-worker ")
+	uiDeploy := strings.Index(calls, "run deploy shiori ")
+	if workerDeploy < 0 || uiDeploy < workerDeploy {
+		t.Fatalf("worker must be ready before the dispatcher: %s", calls)
+	}
+	workerCommand := strings.Split(calls[workerDeploy:], "\n")[0]
+	if !strings.Contains(workerCommand, "--no-allow-unauthenticated --no-iap") || !strings.Contains(workerCommand, "WORKER_ONLY=true") || !strings.Contains(workerCommand, "--timeout=660") || !strings.Contains(workerCommand, "--concurrency=1") {
+		t.Fatalf("worker isolation or long request budget missing: %s", workerCommand)
+	}
+	if !strings.Contains(calls, "tasks queues update shiori-summary") || !strings.Contains(calls, "--member=serviceAccount:shiori-tasks@test-project.iam.gserviceaccount.com --role=roles/run.invoker") || !strings.Contains(calls, "TASKS_QUEUE=projects/test-project/locations/asia-northeast1/queues/shiori-summary") {
+		t.Fatalf("task queue or authenticated invocation missing: %s", calls)
+	}
 	build := strings.Index(calls, "builds submit")
 	deploy := strings.Index(calls, "run deploy")
 	if build < 0 || deploy < build {

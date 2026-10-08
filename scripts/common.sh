@@ -14,6 +14,7 @@ if [[ ! "$SERVICE" =~ ^[a-z][a-z0-9-]{0,39}$ || ! "$REGION" =~ ^[a-z]+-[a-z]+[0-
 fi
 RUNTIME_SA="${SERVICE}-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
 BUILD_SA="${SERVICE}-build@${PROJECT_ID}.iam.gserviceaccount.com"
+TASKS_SA="${SERVICE}-tasks@${PROJECT_ID}.iam.gserviceaccount.com"
 # Service-account IDs must be at most 30 characters.
 if (( ${#SERVICE} > 22 )); then echo 'SERVICE must be at most 22 characters.' >&2; exit 1; fi
 OAUTH_SECRET="${SERVICE}-google-client-secret"

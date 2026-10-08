@@ -91,7 +91,7 @@ if [[ "$1 $2 $3 $4" == 'firestore indexes composite list' ]]; then printf '[]\n'
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(string(calls), "composite create"); got != 5 {
-		t.Fatalf("create calls = %d, want 5; calls:\n%s", got, calls)
+	if got := strings.Count(string(calls), "composite create"); got != 6 {
+		t.Fatalf("create calls = %d, want 6; calls:\n%s", got, calls)
 	}
 }

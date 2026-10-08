@@ -4,7 +4,7 @@ export GOCACHE := $(CURDIR)/.cache/go-build
 export GOPATH := $(CURDIR)/.cache/go
 export PROJECT_ID REGION SERVICE BASE_URL GOOGLE_CLIENT_ID GEMINI_MODEL GEMINI_LOCATION
 
-.PHONY: help dev fmt vet test test-integration build clean emulator emulator-stop bootstrap secrets indexes deploy url preview
+.PHONY: help dev fmt vet test test-integration build clean emulator emulator-stop apis bootstrap migrate-ratings secrets indexes deploy url preview
 help: ## コマンド一覧
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 dev: ## .envを読み込んでローカル起動（Emulatorが必要）
@@ -25,13 +25,17 @@ emulator: ## Firestore EmulatorをDockerで起動
 	docker-compose up -d --wait firestore
 emulator-stop: ## Emulatorを停止（データは一時的）
 	docker-compose down
+apis: ## 必要なGoogle Cloud APIを有効化（有効済みはスキップ）
+	@bash scripts/apis.sh
 bootstrap: ## GCPのAPI・DB・実行用サービスアカウント・Secretを初期構築
 	@bash scripts/bootstrap.sh
 secrets: ## .envのOAuthシークレットをSecret Managerに登録
 	@bash scripts/secrets.sh
+migrate-ratings: ## 既存記事の星合計を初期化（ADCを使用）
+	@bash scripts/migrate-ratings.sh
 indexes: ## Firestoreの複合インデックスを作成
 	@bash scripts/indexes.sh
-deploy: ## テスト・静的解析後、Cloud BuildのbuildpacksでビルドしてCloud Runへデプロイ
+deploy: apis ## テスト・静的解析後、Cloud BuildのbuildpacksでビルドしてCloud Runへデプロイ
 	$(MAKE) test vet
 	@bash scripts/deploy.sh
 url: ## IAPで保護されたCloud RunのURLを表示

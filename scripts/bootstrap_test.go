@@ -17,7 +17,7 @@ func TestBootstrapSkipsConfiguredResources(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{"common.sh", "bootstrap.sh", "indexes.sh"} {
+	for _, name := range []string{"common.sh", "apis.sh", "bootstrap.sh", "indexes.sh"} {
 		contents, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
@@ -34,8 +34,9 @@ func TestBootstrapSkipsConfiguredResources(t *testing.T) {
 	fakeGcloud := `#!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GCLOUD_LOG"
 case "$1 $2 $3 $4" in
-  'services list --enabled '*) printf '%s\n' run.googleapis.com firestore.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com iam.googleapis.com aiplatform.googleapis.com iap.googleapis.com ;;
-  'projects get-iam-policy '*) printf '%s\n' '{"bindings":[{"role":"roles/datastore.user","members":["serviceAccount:shiori-runtime@test-project.iam.gserviceaccount.com"]},{"role":"roles/aiplatform.user","members":["serviceAccount:shiori-runtime@test-project.iam.gserviceaccount.com"]},{"role":"roles/run.builder","members":["serviceAccount:shiori-build@test-project.iam.gserviceaccount.com"]}]}' ;;
+  'services list --enabled '*) printf '%s\n' run.googleapis.com firestore.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com iam.googleapis.com aiplatform.googleapis.com iap.googleapis.com cloudtasks.googleapis.com ;;
+  'projects get-iam-policy '*) printf '%s\n' '{"bindings":[{"role":"roles/datastore.user","members":["serviceAccount:shiori-runtime@test-project.iam.gserviceaccount.com"]},{"role":"roles/aiplatform.user","members":["serviceAccount:shiori-runtime@test-project.iam.gserviceaccount.com"]},{"role":"roles/cloudtasks.enqueuer","members":["serviceAccount:shiori-runtime@test-project.iam.gserviceaccount.com"]},{"role":"roles/run.builder","members":["serviceAccount:shiori-build@test-project.iam.gserviceaccount.com"]}]}' ;;
+  'iam service-accounts get-iam-policy '*) printf '%s\n' '{"bindings":[{"role":"roles/iam.serviceAccountUser","members":["serviceAccount:shiori-runtime@test-project.iam.gserviceaccount.com"]}]}' ;;
   'secrets get-iam-policy '*) printf '%s\n' '{"bindings":[{"role":"roles/secretmanager.secretAccessor","members":["serviceAccount:shiori-runtime@test-project.iam.gserviceaccount.com"]}]}' ;;
   'firestore fields ttls list'*)
     for arg in "$@"; do

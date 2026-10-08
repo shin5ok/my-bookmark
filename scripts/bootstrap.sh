@@ -1,18 +1,11 @@
 #!/usr/bin/env bash
 source "$(dirname "$0")/common.sh"
 command -v jq >/dev/null || { echo 'jq is required for make bootstrap.' >&2; exit 1; }
-enabled_services=$(gcloud services list --enabled --project="$PROJECT_ID" --format='value(config.name)')
-missing_services=()
-for api in run.googleapis.com firestore.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com iam.googleapis.com aiplatform.googleapis.com iap.googleapis.com; do
-  if ! grep -Fxq "$api" <<<"$enabled_services"; then missing_services+=("$api"); fi
-done
-if (( ${#missing_services[@]} )); then
-  gcloud services enable "${missing_services[@]}" --project="$PROJECT_ID"
-fi
+bash scripts/apis.sh
 if ! gcloud firestore databases describe --database='(default)' --project="$PROJECT_ID" >/dev/null 2>&1; then
   gcloud firestore databases create --database='(default)' --location="$REGION" --type=firestore-native --project="$PROJECT_ID"
 fi
-for kind in runtime build; do
+for kind in runtime build tasks; do
   sa="${SERVICE}-${kind}@${PROJECT_ID}.iam.gserviceaccount.com"
   if ! gcloud iam service-accounts describe "$sa" --project="$PROJECT_ID" >/dev/null 2>&1; then
     gcloud iam service-accounts create "${SERVICE}-${kind}" --display-name="Shiori ${kind}" --project="$PROJECT_ID"
@@ -28,12 +21,18 @@ has_binding() {
 }
 project_policy=$(gcloud projects get-iam-policy "$PROJECT_ID" --format=json)
 jq -e '(.bindings // []) | type == "array"' <<<"$project_policy" >/dev/null
-for binding in "$RUNTIME_SA roles/datastore.user" "$RUNTIME_SA roles/aiplatform.user" "$BUILD_SA roles/run.builder"; do
+for binding in "$RUNTIME_SA roles/datastore.user" "$RUNTIME_SA roles/aiplatform.user" "$BUILD_SA roles/run.builder" "$RUNTIME_SA roles/cloudtasks.enqueuer"; do
   read -r sa role <<<"$binding"
   if ! has_binding "$project_policy" "$role" "serviceAccount:$sa"; then
     gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:$sa" --role="$role" --condition=None --quiet >/dev/null
   fi
 done
+# The dispatcher may attach only this dedicated invocation identity to tasks.
+tasks_policy=$(gcloud iam service-accounts get-iam-policy "$TASKS_SA" --project="$PROJECT_ID" --format=json)
+if ! has_binding "$tasks_policy" roles/iam.serviceAccountUser "serviceAccount:$RUNTIME_SA"; then
+  gcloud iam service-accounts add-iam-policy-binding "$TASKS_SA" --project="$PROJECT_ID" \
+    --member="serviceAccount:$RUNTIME_SA" --role=roles/iam.serviceAccountUser --quiet >/dev/null
+fi
 for secret in "$OAUTH_SECRET"; do
   if ! gcloud secrets describe "$secret" --project="$PROJECT_ID" >/dev/null 2>&1; then
     gcloud secrets create "$secret" --replication-policy=automatic --project="$PROJECT_ID"

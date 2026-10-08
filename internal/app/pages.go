@@ -50,6 +50,10 @@ func (a *App) feed(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/mine" {
 		mode = "mine"
 		title = "マイブックマーク"
+		if r.URL.Query().Get("filter") == "unread" {
+			mode = "unread"
+			title = "まだ理解していないブックマーク"
+		}
 		if session(r) == nil {
 			http.Redirect(w, r, "/auth/google", 302)
 			return
@@ -71,8 +75,11 @@ func (a *App) feed(w http.ResponseWriter, r *http.Request) {
 	}
 	nextURL := ""
 	if next != "" {
-		if mode == "mine" {
+		if mode == "mine" || mode == "unread" {
 			nextURL = "/mine?cursor=" + next
+			if mode == "unread" {
+				nextURL += "&filter=unread"
+			}
 		} else {
 			nextURL = "/?sort=" + mode + "&cursor=" + next
 		}

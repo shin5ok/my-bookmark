@@ -20,23 +20,24 @@ type User struct {
 	Name string `firestore:"name"`
 }
 type Article struct {
-	ID         string    `firestore:"-"`
-	URL        string    `firestore:"url"`
-	Title      string    `firestore:"title"`
-	Domain     string    `firestore:"domain"`
-	TLDR       []string  `firestore:"tldr"`
-	Points     []string  `firestore:"points"`
-	Status     string    `firestore:"status"`
-	Model      string    `firestore:"model"`
-	Count      int64     `firestore:"count"`
-	Active     bool      `firestore:"active"`
-	CreatedAt  time.Time `firestore:"created_at"`
-	LeaseUntil time.Time `firestore:"lease_until"`
-	Lease      string    `firestore:"lease"`
-	Stage      string    `firestore:"stage"`
-	Progress   string    `firestore:"progress"`
-	LastError  string    `firestore:"last_error"`
-	Sources    []string  `firestore:"sources"`
+	ID          string    `firestore:"-"`
+	URL         string    `firestore:"url"`
+	Title       string    `firestore:"title"`
+	Domain      string    `firestore:"domain"`
+	TLDR        []string  `firestore:"tldr"`
+	Points      []string  `firestore:"points"`
+	Status      string    `firestore:"status"`
+	Model       string    `firestore:"model"`
+	RatingTotal int64     `firestore:"rating_total"`
+	Count       int64     `firestore:"count"`
+	Active      bool      `firestore:"active"`
+	CreatedAt   time.Time `firestore:"created_at"`
+	LeaseUntil  time.Time `firestore:"lease_until"`
+	Lease       string    `firestore:"lease"`
+	Stage       string    `firestore:"stage"`
+	Progress    string    `firestore:"progress"`
+	LastError   string    `firestore:"last_error"`
+	Sources     []string  `firestore:"sources"`
 }
 type SummaryJob struct {
 	Style      summary.Style `firestore:"style"`
@@ -56,6 +57,7 @@ type Bookmark struct {
 	Name       string    `firestore:"name"`
 	Comment    string    `firestore:"comment"`
 	Tags       []string  `firestore:"tags"`
+	Rating     int       `firestore:"rating"`
 	Understood bool      `firestore:"understood"`
 	CreatedAt  time.Time `firestore:"created_at"`
 	UpdatedAt  time.Time `firestore:"updated_at"`

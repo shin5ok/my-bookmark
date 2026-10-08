@@ -142,8 +142,13 @@ func (s *Store) Save(ctx context.Context, u User, raw, comment string, tags []st
 func (s *Store) Delete(ctx context.Context, uid, aid string) error {
 	return s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 		br := s.bookmark(uid, aid)
-		if _, err := tx.Get(br); err != nil {
+		bd, err := tx.Get(br)
+		if err != nil {
 			return normalizeError(err)
+		}
+		var b Bookmark
+		if err = bd.DataTo(&b); err != nil {
+			return err
 		}
 		ar := s.article(aid)
 		d, err := tx.Get(ar)
@@ -157,6 +162,7 @@ func (s *Store) Delete(ctx context.Context, uid, aid string) error {
 		if a.Count > 0 {
 			a.Count--
 		}
+		a.RatingTotal -= int64(b.Rating)
 		a.Active = a.Count > 0
 		jr := s.client.Collection("summary_jobs").Doc(aid)
 		jd, je := tx.Get(jr)
@@ -168,7 +174,7 @@ func (s *Store) Delete(ctx context.Context, uid, aid string) error {
 			if err = jd.DataTo(&j); err != nil {
 				return err
 			}
-			if j.Status == "queued" || j.Status == "running" {
+			if j.Status == "queued" || j.Status == "dispatched" || j.Status == "running" {
 				j.Status = "cancelled"
 				j.Lease = ""
 				j.LeaseUntil = time.Time{}
@@ -192,13 +198,14 @@ func (s *Store) Delete(ctx context.Context, uid, aid string) error {
 const PageSize = 20
 
 func (s *Store) List(ctx context.Context, mode, uid, cursor string) ([]Entry, string, error) {
+	mine := mode == "mine" || mode == "unread"
 	var q firestore.Query
-	if mode == "mine" {
+	if mine {
 		q = s.client.Collection("bookmarks").Where("user_id", "==", uid).OrderBy("created_at", firestore.Desc).OrderBy(firestore.DocumentID, firestore.Desc)
 	} else {
 		q = s.client.Collection("articles").Where("active", "==", true)
 		if mode == "popular" {
-			q = q.OrderBy("count", firestore.Desc)
+			q = q.OrderBy("rating_total", firestore.Desc)
 		} else {
 			q = q.OrderBy("created_at", firestore.Desc)
 		}
@@ -206,14 +213,14 @@ func (s *Store) List(ctx context.Context, mode, uid, cursor string) ([]Entry, st
 	}
 	if cursor != "" {
 		ref := s.article(cursor)
-		if mode == "mine" {
+		if mine {
 			ref = s.client.Collection("bookmarks").Doc(cursor)
 		}
 		d, err := ref.Get(ctx)
 		if err != nil {
 			return nil, "", normalizeError(err)
 		}
-		if mode == "mine" {
+		if mine {
 			var b Bookmark
 			if err = d.DataTo(&b); err != nil {
 				return nil, "", err
@@ -224,10 +231,35 @@ func (s *Store) List(ctx context.Context, mode, uid, cursor string) ([]Entry, st
 		}
 		q = q.StartAfter(d)
 	}
-	docs, err := q.Limit(PageSize + 1).Documents(ctx).GetAll()
-	if err != nil {
-		return nil, "", err
+	// Filter after decoding so legacy bookmarks lacking understood are included.
+	// Scan until we have a full matching page plus one for the next-page link.
+	var docs []*firestore.DocumentSnapshot
+	for len(docs) <= PageSize {
+		batch, err := q.Limit(PageSize + 1).Documents(ctx).GetAll()
+		if err != nil {
+			return nil, "", err
+		}
+		for _, d := range batch {
+			if mode == "unread" {
+				var bookmark Bookmark
+				if err := d.DataTo(&bookmark); err != nil {
+					return nil, "", err
+				}
+				if bookmark.Understood {
+					continue
+				}
+			}
+			docs = append(docs, d)
+			if len(docs) > PageSize {
+				break
+			}
+		}
+		if len(batch) < PageSize+1 || len(docs) > PageSize {
+			break
+		}
+		q = q.StartAfter(batch[len(batch)-1])
 	}
+	var err error
 	next := ""
 	if len(docs) > PageSize {
 		next = docs[PageSize-1].Ref.ID
@@ -236,7 +268,7 @@ func (s *Store) List(ctx context.Context, mode, uid, cursor string) ([]Entry, st
 	entries := make([]Entry, 0, len(docs))
 	for _, d := range docs {
 		var e Entry
-		if mode == "mine" {
+		if mine {
 			var b Bookmark
 			if err = d.DataTo(&b); err != nil {
 				return nil, "", err

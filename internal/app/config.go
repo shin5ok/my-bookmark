@@ -12,13 +12,15 @@ import (
 )
 
 type Config struct {
-	APIOnly                            bool
-	APIBaseURL                         string
-	Project, Port, BaseURL, Env        string
-	GoogleClientID, GoogleClientSecret string
-	GeminiModel, GeminiLocation        string
-	IAPAudience                        string
-	IAPAllowlist                       iap.Allowlist
+	APIOnly                                         bool
+	WorkerOnly                                      bool
+	TasksQueue, TasksWorkerURL, TasksServiceAccount string
+	APIBaseURL                                      string
+	Project, Port, BaseURL, Env                     string
+	GoogleClientID, GoogleClientSecret              string
+	GeminiModel, GeminiLocation                     string
+	IAPAudience                                     string
+	IAPAllowlist                                    iap.Allowlist
 }
 
 func LoadConfig() (Config, error) {
@@ -27,6 +29,13 @@ func LoadConfig() (Config, error) {
 		return c, errors.New("API_ONLY must be true or false")
 	}
 	c.APIOnly = os.Getenv("API_ONLY") == "true"
+	if value := os.Getenv("WORKER_ONLY"); value != "" && value != "true" && value != "false" {
+		return c, errors.New("WORKER_ONLY must be true or false")
+	}
+	c.WorkerOnly = os.Getenv("WORKER_ONLY") == "true"
+	c.TasksQueue = os.Getenv("TASKS_QUEUE")
+	c.TasksWorkerURL = os.Getenv("TASKS_WORKER_URL")
+	c.TasksServiceAccount = os.Getenv("TASKS_SERVICE_ACCOUNT")
 	c.APIBaseURL = strings.TrimRight(os.Getenv("API_BASE_URL"), "/")
 	c.BaseURL = strings.TrimRight(c.BaseURL, "/")
 	if c.IAPAudience != "" || c.APIOnly {
@@ -51,6 +60,24 @@ func env(key, fallback string) string {
 	return fallback
 }
 func (c Config) Validate() error {
+	if c.WorkerOnly && (c.APIOnly || c.Env != "production") {
+		return errors.New("WORKER_ONLY requires a dedicated production service")
+	}
+	if c.TasksQueue != "" || c.TasksWorkerURL != "" || c.TasksServiceAccount != "" {
+		if !regexp.MustCompile(`^projects/[a-z0-9-]+/locations/[a-z0-9-]+/queues/[A-Za-z0-9_-]+$`).MatchString(c.TasksQueue) {
+			return errors.New("TASKS_QUEUE must be a full Cloud Tasks queue resource name")
+		}
+		u, err := url.Parse(c.TasksWorkerURL)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+			return errors.New("TASKS_WORKER_URL must be an HTTPS origin")
+		}
+		if !regexp.MustCompile(`^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$`).MatchString(c.TasksServiceAccount) {
+			return errors.New("TASKS_SERVICE_ACCOUNT must be a service account email")
+		}
+	}
+	if c.WorkerOnly && c.TasksQueue == "" {
+		return errors.New("WORKER_ONLY requires Cloud Tasks configuration")
+	}
 	if c.Env != "production" && c.Env != "development" {
 		return errors.New("APP_ENV must be production or development")
 	}
@@ -68,7 +95,7 @@ func (c Config) Validate() error {
 		if os.Getenv("FIRESTORE_EMULATOR_HOST") != "" {
 			return errors.New("production cannot use Firestore Emulator")
 		}
-		if (!c.APIOnly && c.IAPAudience == "") || len(c.IAPAllowlist.Members()) == 0 {
+		if !c.WorkerOnly && ((!c.APIOnly && c.IAPAudience == "") || len(c.IAPAllowlist.Members()) == 0) {
 			return errors.New("IAP_AUDIENCE and allow_accounts.yaml are required in production")
 		}
 	} else {

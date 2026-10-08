@@ -27,6 +27,7 @@ create_index() {
 }
 create_index articles active created_at
 create_index articles active count
+create_index articles active rating_total
 create_index bookmarks user_id created_at
 create_index bookmarks article_id created_at
 create_index summary_jobs status queued_at ascending

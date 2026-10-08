@@ -73,7 +73,7 @@ func TestUnderstoodHTTPFlow(t *testing.T) {
 		for _, page := range []string{"/mine", "/articles/" + article.ID} {
 			w := request("GET", page, "token", nil)
 			body := w.Body.String()
-			if w.Code != 200 || strings.Contains(body, `class="bookmark is-understood"`) != understood || strings.Contains(body, `aria-pressed="true"`) != understood || !strings.Contains(body, "understood-button") {
+			if w.Code != 200 || strings.Contains(body, `class="bookmark is-understood is-collapsed"`) != understood || strings.Contains(body, `aria-pressed="true"`) != understood || !strings.Contains(body, "understood-button") {
 				t.Fatalf("state missing on %s: %d %s", page, w.Code, body)
 			}
 		}
@@ -131,7 +131,7 @@ func checkUnderstoodInBrowser(t *testing.T, a *App) {
 	defer cancel()
 	for _, width := range []int64{390, 1280} {
 		var before, after, location, label string
-		var overflow bool
+		var overflow, titleOnly, expanded bool
 		if err := chromedp.Run(ctx,
 			chromedp.EmulateViewport(width, 900),
 			network.SetCookie("shiori_session", "token").WithURL(server.URL),
@@ -139,11 +139,11 @@ func checkUnderstoodInBrowser(t *testing.T, a *App) {
 			chromedp.WaitVisible(".understood-button", chromedp.ByQuery),
 			chromedp.Evaluate(`getComputedStyle(document.querySelector('.bookmark')).backgroundColor`, &before),
 			chromedp.Click(".understood-button", chromedp.ByQuery),
-			chromedp.WaitVisible(".bookmark.is-understood .understood-button[aria-pressed=true]", chromedp.ByQuery),
+			chromedp.WaitVisible(".bookmark.is-collapsed .article-title a[aria-expanded=false]", chromedp.ByQuery),
 			chromedp.Evaluate(`getComputedStyle(document.querySelector('.bookmark')).backgroundColor`, &after),
 			chromedp.Evaluate(`document.documentElement.scrollWidth > innerWidth`, &overflow),
 			chromedp.Location(&location),
-			chromedp.Text(".understood-button", &label, chromedp.ByQuery)); err != nil {
+			chromedp.Evaluate(`document.querySelector(".understood-button").textContent`, &label)); err != nil {
 			t.Fatal(err)
 		}
 		if before == after || overflow || location != server.URL+"/mine" || label != "✓ 理解済み" {
@@ -151,13 +151,17 @@ func checkUnderstoodInBrowser(t *testing.T, a *App) {
 		}
 		if err := chromedp.Run(ctx,
 			chromedp.Reload(),
-			chromedp.WaitVisible(".bookmark.is-understood .understood-button[aria-pressed=true]", chromedp.ByQuery),
+			chromedp.WaitVisible(".bookmark.is-collapsed .article-title a[aria-expanded=false]", chromedp.ByQuery),
+			chromedp.Evaluate(`Array.from(document.querySelector('.bookmark').children).filter(el => el.checkVisibility()).every(el => el.classList.contains('article-title'))`, &titleOnly),
+			chromedp.Click(".article-title a", chromedp.ByQuery),
+			chromedp.WaitVisible(".understood-button", chromedp.ByQuery),
+			chromedp.Evaluate(`document.querySelector('.article-title a').getAttribute('aria-expanded') === 'true' && document.querySelector('.bookmark').classList.contains('is-understood')`, &expanded),
 			chromedp.Click(".understood-button", chromedp.ByQuery),
 			chromedp.WaitVisible(".bookmark:not(.is-understood) .understood-button[aria-pressed=false]", chromedp.ByQuery),
 			chromedp.Text(".understood-button", &label, chromedp.ByQuery)); err != nil {
 			t.Fatal(err)
 		}
-		if label != "理解した！" {
+		if label != "理解した" || !titleOnly || !expanded {
 			t.Fatalf("undo label: %s", label)
 		}
 	}

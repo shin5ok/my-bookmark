@@ -45,3 +45,29 @@
   .article-meta { font-size: 11px; }
   .layout { padding-top: 20px; }
 }
+
+/* Understood bookmarks keep their title as the disclosure control. */
+.bookmark.is-collapsed > :not(.article-title) { display: none; }
+.bookmark.is-collapsed { padding-bottom: 16px; }
+.bookmark.is-collapsed .article-title { margin-bottom: 0; }
+.bookmark.is-understood .article-title a { cursor: pointer; }
+.bookmark.is-understood .article-title a::after { content: ' ▴'; color: var(--blue); font-size: 14px; }
+.bookmark.is-collapsed .article-title a::after { content: ' ▾'; }
+@media (max-width: 680px) { .bookmark.is-collapsed { padding-bottom: 12px; } }
+
+.mine-menu { display: flex; flex-direction: column; gap: 2px; }
+.sidebar nav .mine-submenu { padding: 5px 14px 5px 50px; min-height: 44px; font-size: 13px; }
+.bookmark-rating { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; margin-top: 8px; }
+.rating-total { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.rating-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.rating-label { color: var(--muted); font-size: 12px; }
+.rating-stars { display: flex; }
+.rating-star { display: grid; place-items: center; width: 44px; min-height: 44px; padding: 0; border: 0; border-radius: 6px; font-size: 23px; color: var(--muted); }
+.rating-star:hover:not(:disabled) { background: var(--pale); }
+.rating-clear { min-height: 44px; padding: 4px 8px; border: 0; color: var(--muted); font-size: 12px; }
+@media (max-width: 640px) {
+  .sidebar nav { flex-wrap: wrap; align-items: flex-start; }
+  .mine-menu { flex: 1; }
+  .sidebar nav .mine-submenu { padding: 4px 10px; justify-content: center; }
+  .rating-label { flex-basis: 100%; }
+}

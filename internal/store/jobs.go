@@ -71,7 +71,7 @@ func (s *Store) Enqueue(ctx context.Context, uid, aid string, style summary.Styl
 			if err = jd.DataTo(&j); err != nil {
 				return err
 			}
-			if j.Status == "queued" || j.Status == "running" && j.LeaseUntil.After(now) {
+			if j.Status == "queued" || j.Status == "dispatched" || j.Status == "running" && j.LeaseUntil.After(now) {
 				return ErrBusy
 			}
 		}
@@ -91,6 +91,7 @@ func (s *Store) Enqueue(ctx context.Context, uid, aid string, style summary.Styl
 		j.Lease = ""
 		j.LeaseUntil = time.Time{}
 		j.LastError = ""
+		j.Attempts = 0
 		a.Status = "queued"
 		a.Stage = "queued"
 		a.Progress = "再試行を受け付けました"
@@ -113,78 +114,164 @@ func (s *Store) Enqueue(ctx context.Context, uid, aid string, style summary.Styl
 	}
 	return "queued", nil
 }
-func (s *Store) NextQueued(ctx context.Context) (*SummaryJob, string, error) {
+
+// QueuedJobs is the durable outbox shared by browser and API registrations.
+func (s *Store) QueuedJobs(ctx context.Context) ([]SummaryJob, error) {
 	docs, err := s.client.Collection("summary_jobs").Where("status", "==", "queued").OrderBy("queued_at", firestore.Asc).Limit(10).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	jobs := make([]SummaryJob, 0, len(docs))
+	for _, d := range docs {
+		var j SummaryJob
+		if err := d.DataTo(&j); err != nil {
+			return nil, err
+		}
+		j.ArticleID = d.Ref.ID
+		jobs = append(jobs, j)
+	}
+	return jobs, nil
+}
+
+func (s *Store) MarkDispatched(ctx context.Context, id string, queuedAt time.Time) error {
+	return s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		ref := s.client.Collection("summary_jobs").Doc(id)
+		d, err := tx.Get(ref)
+		if missing(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var j SummaryJob
+		if err = d.DataTo(&j); err != nil {
+			return err
+		}
+		// A task can start before CreateTask returns, or a new request can supersede it.
+		if j.Status != "queued" || !j.QueuedAt.Equal(queuedAt) {
+			return nil
+		}
+		return tx.Update(ref, []firestore.Update{{Path: "status", Value: "dispatched"}})
+	})
+}
+
+// ClaimJob returns nil for obsolete/completed tasks, ErrBusy while another
+// worker owns the lease, and reclaims work after a crashed worker's lease expires.
+func (s *Store) ClaimJob(ctx context.Context, id string, queuedAt time.Time) (*SummaryJob, string, error) {
+	token := RandomToken()
+	var claimed *SummaryJob
+	err := s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		claimed = nil // Firestore may rerun this closure after contention.
+		jr := s.client.Collection("summary_jobs").Doc(id)
+		jd, err := tx.Get(jr)
+		if missing(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var j SummaryJob
+		if err = jd.DataTo(&j); err != nil {
+			return err
+		}
+		if !j.QueuedAt.Equal(queuedAt) {
+			return nil
+		}
+		if j.Status != "queued" && j.Status != "dispatched" && j.Status != "running" {
+			return nil
+		}
+		now := time.Now().UTC()
+		if j.Status == "running" && j.LeaseUntil.After(now) {
+			return ErrBusy
+		}
+		ar := s.article(id)
+		ad, err := tx.Get(ar)
+		if err != nil {
+			return err
+		}
+		var a Article
+		if err = ad.DataTo(&a); err != nil {
+			return err
+		}
+		if !a.Active || a.Count <= 0 {
+			j.Status = "cancelled"
+			a.Status, a.Stage, a.Progress, a.Lease = "pending", "", "", ""
+			a.LeaseUntil = time.Time{}
+			j.Lease, j.LeaseUntil = "", time.Time{}
+		} else {
+			j.ArticleID = id
+			j.Status, j.Stage = "running", "fetching"
+			j.Attempts++
+			j.Lease, j.LeaseUntil = token, now.Add(JobLeaseDuration)
+			a.Status, a.Stage, a.Progress = "processing", "fetching", "要約対象を確認しています"
+			a.Lease, a.LeaseUntil, a.LastError = token, j.LeaseUntil, ""
+			claimed = &j
+		}
+		if err = tx.Set(ar, a); err != nil {
+			return err
+		}
+		return tx.Set(jr, j)
+	})
 	if err != nil {
 		return nil, "", err
 	}
-	for _, candidate := range docs {
-		id := candidate.Ref.ID
-		token := RandomToken()
-		now := time.Now().UTC()
-		var claimedJob SummaryJob
-		claimed := false
-		err = s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-			jr := s.client.Collection("summary_jobs").Doc(id)
-			jd, e := tx.Get(jr)
-			if e != nil {
-				return normalizeError(e)
-			}
-			var j SummaryJob
-			if e = jd.DataTo(&j); e != nil {
-				return e
-			}
-			if j.Status != "queued" {
-				return ErrBusy
-			}
-			ar := s.article(id)
-			ad, e := tx.Get(ar)
-			if e != nil {
-				return e
-			}
-			var a Article
-			if e = ad.DataTo(&a); e != nil {
-				return e
-			}
-			if !a.Active || a.Count <= 0 {
-				j.Status = "cancelled"
-				a.Status = "pending"
-				a.Stage = ""
-				if e = tx.Set(jr, j); e != nil {
-					return e
-				}
-				return tx.Set(ar, a)
-			}
-			claimed = true
-			j.Status = "running"
-			j.Stage = "fetching"
-			j.Attempts++
-			j.Lease = token
-			j.LeaseUntil = now.Add(5 * time.Minute)
-			claimedJob = j
-			a.Status = "processing"
-			a.Stage = "fetching"
-			a.Progress = "記事の本文を取得しています"
-			a.Lease = token
-			a.LeaseUntil = j.LeaseUntil
-			a.LastError = ""
-			if e = tx.Set(ar, a); e != nil {
-				return e
-			}
-			return tx.Set(jr, j)
-		})
-		if err == nil {
-			if !claimed {
-				continue
-			}
-			claimedJob.ArticleID = id
-			return &claimedJob, token, nil
+	if claimed == nil {
+		return nil, "", nil
+	}
+	return claimed, token, nil
+}
+
+const JobLeaseDuration = 11 * time.Minute
+
+func (s *Store) NextQueued(ctx context.Context) (*SummaryJob, string, error) {
+	jobs, err := s.QueuedJobs(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, j := range jobs {
+		job, lease, err := s.ClaimJob(ctx, j.ArticleID, j.QueuedAt)
+		if errors.Is(err, ErrBusy) {
+			continue
 		}
-		if !errors.Is(err, ErrBusy) {
-			return nil, "", err
+		if err != nil || job != nil {
+			return job, lease, err
 		}
 	}
 	return nil, "", nil
+}
+
+// RetryJob releases the lease for Cloud Tasks' next delivery. It deliberately
+// does not put the job back in the outbox, since the existing task owns retries.
+func (s *Store) RetryJob(ctx context.Context, id, lease string) error {
+	return s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		jr, ar := s.client.Collection("summary_jobs").Doc(id), s.article(id)
+		jd, err := tx.Get(jr)
+		if err != nil {
+			return err
+		}
+		ad, err := tx.Get(ar)
+		if err != nil {
+			return err
+		}
+		var j SummaryJob
+		var a Article
+		if err = jd.DataTo(&j); err != nil {
+			return err
+		}
+		if err = ad.DataTo(&a); err != nil {
+			return err
+		}
+		if j.Status != "running" || j.Lease != lease || a.Lease != lease {
+			return ErrBusy
+		}
+		j.Status, j.Stage, j.Lease, j.LeaseUntil = "dispatched", "queued", "", time.Time{}
+		a.Status, a.Stage, a.Progress = "queued", "queued", "一時的なエラーのため、時間をおいて再試行します"
+		a.Lease, a.LeaseUntil = "", time.Time{}
+		if err = tx.Set(jr, j); err != nil {
+			return err
+		}
+		return tx.Set(ar, a)
+	})
 }
 func (s *Store) JobOwner(ctx context.Context, id string) (string, error) {
 	d, e := s.client.Collection("summary_jobs").Doc(id).Get(ctx)
@@ -227,7 +314,7 @@ func (s *Store) UpdateStage(ctx context.Context, id, lease, stage, progress stri
 			a.Sources = sources
 		}
 		j.Stage = stage
-		j.LeaseUntil = time.Now().Add(5 * time.Minute)
+		j.LeaseUntil = time.Now().Add(JobLeaseDuration)
 		a.LeaseUntil = j.LeaseUntil
 		if err = tx.Set(ar, a); err != nil {
 			return err

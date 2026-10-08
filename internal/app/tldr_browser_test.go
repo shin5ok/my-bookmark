@@ -2,13 +2,16 @@ package app
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"my-bookmark/internal/store"
 )
@@ -33,7 +36,15 @@ func TestTLDRPollingAndAccordionInBrowser(t *testing.T) {
 	pending.TLDR = nil
 	a := testApp(t)
 	a.db = &summaryTestDB{testDB: testDB{entries: []store.Entry{{Article: pending}}}, article: ready}
-	server := httptest.NewServer(a.Handler())
+	var polls atomic.Int64
+	handler := a.Handler()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/summary") && polls.Add(1) <= 181 {
+			writeJSON(w, http.StatusOK, summaryData(pending))
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}))
 	defer server.Close()
 	options := append(chromedp.DefaultExecAllocatorOptions[:], chromedp.ExecPath(chrome))
 	if os.Getuid() == 0 {
@@ -45,6 +56,13 @@ func TestTLDRPollingAndAccordionInBrowser(t *testing.T) {
 	defer stop()
 	ctx, cancel := context.WithTimeout(browser, 30*time.Second)
 	defer cancel()
+	// Accelerate the browser timers to verify progress beyond the former 180-poll limit.
+	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		_, err := page.AddScriptToEvaluateOnNewDocument(`const originalTimeout = window.setTimeout; window.setTimeout = (fn, ms, ...args) => originalTimeout(fn, ms === 3000 || ms === 15000 ? 1 : ms, ...args);`).Do(ctx)
+		return err
+	})); err != nil {
+		t.Fatal(err)
+	}
 	for _, width := range []int64{390, 1280} {
 		var visible, overflow bool
 		var count int

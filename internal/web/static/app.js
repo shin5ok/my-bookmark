@@ -76,14 +76,16 @@
     }
   }
   async function poll(id) {
-    for (let i = 0; i < 180; i++) {
-      await new Promise(resolve => setTimeout(resolve, 3000));
+    // Queue delays and retries can outlast a single worker attempt.
+    for (let i = 0; article(id) && ['queued', 'processing'].includes(elStatus(id)); i++) {
+      await new Promise(resolve => setTimeout(resolve, i < 20 ? 3000 : 15000));
       try {
         const response = await fetch(`/articles/${id}/summary`);
-        if (!response.ok) return;
+        if ([401, 403, 404].includes(response.status)) return;
+        if (!response.ok) continue;
         const data = await response.json(); update(id, data);
         if (!['queued','processing'].includes(data.status)) return;
-      } catch { return; }
+      } catch { /* Retry temporary network failures while this page is open. */ }
     }
   }
   async function generate(id, style = '') {
@@ -129,6 +131,33 @@
     }
   }));
   document.querySelectorAll('.generate-button').forEach(button => button.addEventListener('click', () => generate(button.dataset.id)));
+  function collapseBookmark(el, collapsed) {
+    if (!el) return;
+    el.classList.toggle('is-collapsed', collapsed);
+    const title = el.querySelector('.article-title a');
+    if (el.classList.contains('is-understood')) {
+      title.setAttribute('role', 'button');
+      title.setAttribute('aria-expanded', String(!collapsed));
+    } else {
+      title.removeAttribute('role');
+      title.removeAttribute('aria-expanded');
+    }
+    if (collapsed) title.focus();
+  }
+  document.querySelectorAll('.article-title a').forEach(title => {
+    title.addEventListener('click', event => {
+      const el = title.closest('.bookmark');
+      if (!el.classList.contains('is-understood')) return;
+      event.preventDefault();
+      collapseBookmark(el, !el.classList.contains('is-collapsed'));
+    });
+    title.addEventListener('keydown', event => {
+      if (event.key === ' ' && title.closest('.bookmark').classList.contains('is-understood')) {
+        event.preventDefault();
+        title.click();
+      }
+    });
+  });
   document.querySelectorAll('.understood-button').forEach(button => button.addEventListener('click', async () => {
     const id = button.dataset.id;
     if (!csrf || button.disabled || !/^[a-f0-9]{64}$/.test(id)) return;
@@ -144,14 +173,57 @@
       }
       const data = await response.json();
       button.setAttribute('aria-pressed', String(data.understood));
-      button.textContent = data.understood ? '✓ 理解済み' : '理解した！';
-      article(id)?.classList.toggle('is-understood', data.understood);
+      button.textContent = data.understood ? '✓ 理解済み' : '理解した';
+      const el = article(id);
+      el?.classList.toggle('is-understood', data.understood);
+      collapseBookmark(el, data.understood);
+      if (data.understood && el?.closest('.feed')?.dataset.filter === 'unread') {
+        // Refresh to fill this filtered page and update its pagination.
+        window.location.reload();
+      }
     } catch (error) {
       toast(error.message);
     } finally {
       button.disabled = false;
     }
   }));
+  document.querySelectorAll('.rating-controls').forEach(group => {
+    group.addEventListener('click', async event => {
+      const button = event.target.closest('.rating-star, .rating-clear');
+      if (!button || button.disabled || !csrf || group.dataset.busy === 'true') return;
+      const id = group.dataset.id;
+      if (!/^[a-f0-9]{64}$/.test(id)) return;
+      const rating = button.classList.contains('rating-clear') ? 0 : Number(button.dataset.rating);
+      group.dataset.busy = 'true';
+      const buttons = group.querySelectorAll('button');
+      buttons.forEach(control => { control.disabled = true; });
+      try {
+        const response = await fetch(`/bookmarks/${id}/rating`, {
+          method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ csrf, rating: String(rating) }),
+        });
+        if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) {
+          throw new Error(response.status === 401 || response.status === 403 ? 'ページを再読み込みし、ログインしてから再試行してください。' : '評価を保存できませんでした。もう一度お試しください。');
+        }
+        const data = await response.json();
+        group.dataset.rating = String(data.rating);
+        group.querySelectorAll('.rating-star').forEach(star => {
+          const value = Number(star.dataset.rating);
+          star.setAttribute('aria-pressed', String(value === data.rating));
+          star.dataset.filled = String(value <= data.rating);
+          star.querySelector('span').textContent = value <= data.rating ? '⭐' : '☆';
+        });
+        article(id).querySelector('.rating-total-value').textContent = String(data.rating_total);
+        if (new URLSearchParams(window.location.search).get('sort') === 'popular') window.location.reload();
+      } catch (error) {
+        toast(error.message);
+      } finally {
+        delete group.dataset.busy;
+        buttons.forEach(control => { control.disabled = false; });
+        group.querySelector('.rating-clear').disabled = Number(group.dataset.rating) === 0;
+      }
+    });
+  });
   document.querySelectorAll('.summary-style').forEach(button => button.addEventListener('click', () => generate(button.dataset.id, button.dataset.style)));
   document.querySelectorAll('.summary[data-status="queued"], .summary[data-status="processing"]').forEach(el => poll(el.closest('[data-article]').dataset.article));
   document.querySelectorAll('.delete-form').forEach(form => form.addEventListener('submit', event => {

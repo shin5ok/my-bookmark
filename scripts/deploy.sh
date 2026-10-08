@@ -17,11 +17,30 @@ image="${REGION}-docker.pkg.dev/${PROJECT_ID}/shiori-images/${SERVICE}:$(date -u
 gcloud builds submit . --config=cloudbuild.yaml --project="$PROJECT_ID" --region="$REGION" \
   --service-account="projects/$PROJECT_ID/serviceAccounts/$BUILD_SA" \
   --substitutions="_IMAGE=$image" --quiet
+# Tasks call a dedicated IAM-protected service; browser IAP is never bypassed.
+worker_service="${SERVICE}-worker"
+worker_url="https://${worker_service}-${project_number}.${REGION}.run.app"
+queue="${SERVICE}-summary"
+queue_resource="projects/$PROJECT_ID/locations/$REGION/queues/$queue"
+queue_action=update
+if ! gcloud tasks queues describe "$queue" --project="$PROJECT_ID" --location="$REGION" >/dev/null 2>&1; then queue_action=create; fi
+gcloud tasks queues "$queue_action" "$queue" --project="$PROJECT_ID" --location="$REGION" \
+  --max-concurrent-dispatches=3 --max-dispatches-per-second=1 --max-attempts=-1 \
+  --min-backoff=30s --max-backoff=600s --max-retry-duration=0s --quiet
+tasks_env="TASKS_QUEUE=$queue_resource,TASKS_WORKER_URL=$worker_url,TASKS_SERVICE_ACCOUNT=$TASKS_SA"
+gcloud run deploy "$worker_service" --image="$image" --project="$PROJECT_ID" --region="$REGION" \
+  --service-account="$RUNTIME_SA" \
+  --no-allow-unauthenticated --no-iap --port=8080 --cpu=1 --memory=2Gi --concurrency=1 --timeout=660 --cpu-throttling \
+  --min=0 --max=3 \
+  --set-env-vars="APP_ENV=production,WORKER_ONLY=true,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,BASE_URL=$worker_url,GEMINI_MODEL=$GEMINI_MODEL,GEMINI_LOCATION=$GEMINI_LOCATION,$tasks_env" \
+  --clear-secrets --quiet
+gcloud run services add-iam-policy-binding "$worker_service" --project="$PROJECT_ID" --region="$REGION" \
+  --member="serviceAccount:$TASKS_SA" --role=roles/run.invoker --quiet >/dev/null
 gcloud run deploy "$SERVICE" --image="$image" --project="$PROJECT_ID" --region="$REGION" \
   --service-account="$RUNTIME_SA" \
   --no-allow-unauthenticated --iap --port=8080 --cpu=1 --memory=2Gi --concurrency=40 --timeout=300 --no-cpu-throttling \
   --min=1 --max=3 \
-  --set-env-vars="APP_ENV=production,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,BASE_URL=$base_url,API_BASE_URL=$api_url,IAP_AUDIENCE=/projects/$project_number/locations/$REGION/services/$SERVICE,GEMINI_MODEL=$GEMINI_MODEL,GEMINI_LOCATION=$GEMINI_LOCATION" \
+  --set-env-vars="APP_ENV=production,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,BASE_URL=$base_url,API_BASE_URL=$api_url,IAP_AUDIENCE=/projects/$project_number/locations/$REGION/services/$SERVICE,GEMINI_MODEL=$GEMINI_MODEL,GEMINI_LOCATION=$GEMINI_LOCATION,$tasks_env" \
   --clear-secrets --quiet
 gcloud run services add-iam-policy-binding "$SERVICE" --project="$PROJECT_ID" --region="$REGION" \
   --member="serviceAccount:service-${project_number}@gcp-sa-iap.iam.gserviceaccount.com" \

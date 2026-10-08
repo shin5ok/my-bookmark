@@ -26,6 +26,10 @@ type Gemini struct {
 }
 
 func (g *Gemini) Summarize(ctx context.Context, title, body string, style summary.Style) (summary.Result, error) {
+	return g.generate(ctx, title, []any{map[string]string{"text": "記事タイトル: " + title + "\n記事本文:\n" + body}}, SummaryInstruction(style), style, time.Minute)
+}
+
+func (g *Gemini) generate(ctx context.Context, title string, parts []any, instruction string, style summary.Style, timeout time.Duration) (summary.Result, error) {
 	if !style.Valid() {
 		return summary.Result{}, summary.ErrInvalidStyle
 	}
@@ -39,8 +43,8 @@ func (g *Gemini) Summarize(ctx context.Context, title, body string, style summar
 		"points":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 0, "maxItems": 5},
 	}, "required": []string{"sufficient", "title", "points", "tldr"}}
 	payload := map[string]any{
-		"systemInstruction": map[string]any{"parts": []any{map[string]string{"text": SummaryInstruction(style)}}},
-		"contents":          []any{map[string]any{"role": "user", "parts": []any{map[string]string{"text": "記事タイトル: " + title + "\n記事本文:\n" + body}}}},
+		"systemInstruction": map[string]any{"parts": []any{map[string]string{"text": instruction}}},
+		"contents":          []any{map[string]any{"role": "user", "parts": parts}},
 		"generationConfig":  map[string]any{"responseMimeType": "application/json", "responseJsonSchema": schema, "maxOutputTokens": 4096},
 	}
 	data, err := json.Marshal(payload)
@@ -67,7 +71,7 @@ func (g *Gemini) Summarize(ctx context.Context, title, body string, style summar
 	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
 	client := g.Client
 	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
+		client = &http.Client{Timeout: timeout}
 	}
 	res, err := client.Do(req)
 	if err != nil {
@@ -75,7 +79,7 @@ func (g *Gemini) Summarize(ctx context.Context, title, body string, style summar
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		return summary.Result{}, fmt.Errorf("Gemini returned HTTP %d", res.StatusCode)
+		return summary.Result{}, &APIError{Status: res.StatusCode}
 	}
 	var result struct {
 		Candidates []struct {
