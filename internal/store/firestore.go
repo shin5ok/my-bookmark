@@ -46,6 +46,15 @@ func (s *Store) Own(ctx context.Context, uid, aid string) (*Bookmark, error) {
 	err = d.DataTo(&b)
 	return &b, err
 }
+
+func (s *Store) SetUnderstood(ctx context.Context, uid, aid string, understood bool) error {
+	_, err := s.bookmark(uid, aid).Update(ctx, []firestore.Update{
+		{Path: "understood", Value: understood},
+		{Path: "updated_at", Value: time.Now().UTC()},
+	})
+	return normalizeError(err)
+}
+
 func (s *Store) Save(ctx context.Context, u User, raw, comment string, tags []string) (Article, error) {
 	id := Hash(raw)
 	ar := s.article(id)

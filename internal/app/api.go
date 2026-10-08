@@ -8,11 +8,37 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"my-bookmark/internal/content"
 	"my-bookmark/internal/store"
 )
+
+var apiURLCandidate = regexp.MustCompile(`(?i)https?://[^\s\p{Z}<>"'「」『』【】\[\]（）。、！？；：]+`)
+
+// extractSingleAPIURL accepts surrounding prose while keeping ambiguous input out of Save.
+// The extracted URL still goes through the same validation as browser submissions.
+func extractSingleAPIURL(input string) (string, error) {
+	candidates := apiURLCandidate.FindAllString(input, -1)
+	if len(candidates) != 1 {
+		return "", errors.New("URLは1件だけ指定してください")
+	}
+	candidate := strings.TrimRight(candidates[0], ".,!?;:。、！？；：")
+	for len(candidate) > 0 {
+		end, size := utf8.DecodeLastRuneInString(candidate)
+		if !strings.ContainsRune(")]}）」", end) {
+			break
+		}
+		if end == ')' && strings.Count(candidate, "(") >= strings.Count(candidate, ")") {
+			break
+		}
+		candidate = candidate[:len(candidate)-size]
+	}
+	return content.NormalizeURL(candidate)
+}
 
 func apiJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -94,7 +120,12 @@ func (a *App) saveAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	raw, comment, tags, err := bookmarkInput(url.Values{"url": {input.URL}, "comment": {input.Comment}, "tags": {strings.Join(input.Tags, ",")}})
+	extracted, err := extractSingleAPIURL(input.URL)
+	if err != nil {
+		apiError(w, 400, err.Error())
+		return
+	}
+	raw, comment, tags, err := bookmarkInput(url.Values{"url": {extracted}, "comment": {input.Comment}, "tags": {strings.Join(input.Tags, ",")}})
 	if err != nil {
 		apiError(w, 400, err.Error())
 		return

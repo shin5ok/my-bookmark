@@ -129,6 +129,29 @@
     }
   }));
   document.querySelectorAll('.generate-button').forEach(button => button.addEventListener('click', () => generate(button.dataset.id)));
+  document.querySelectorAll('.understood-button').forEach(button => button.addEventListener('click', async () => {
+    const id = button.dataset.id;
+    if (!csrf || button.disabled || !/^[a-f0-9]{64}$/.test(id)) return;
+    const understood = button.getAttribute('aria-pressed') !== 'true';
+    button.disabled = true;
+    try {
+      const response = await fetch(`/bookmarks/${id}/understood`, {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ csrf, understood: String(understood) }),
+      });
+      if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) {
+        throw new Error(response.status === 401 || response.status === 403 ? 'ページを再読み込みし、ログインしてから再試行してください。' : '理解済みの状態を保存できませんでした。もう一度お試しください。');
+      }
+      const data = await response.json();
+      button.setAttribute('aria-pressed', String(data.understood));
+      button.textContent = data.understood ? '✓ 理解済み' : '理解した！';
+      article(id)?.classList.toggle('is-understood', data.understood);
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }));
   document.querySelectorAll('.summary-style').forEach(button => button.addEventListener('click', () => generate(button.dataset.id, button.dataset.style)));
   document.querySelectorAll('.summary[data-status="queued"], .summary[data-status="processing"]').forEach(el => poll(el.closest('[data-article]').dataset.article));
   document.querySelectorAll('.delete-form').forEach(form => form.addEventListener('submit', event => {

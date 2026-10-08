@@ -135,6 +135,9 @@ curl --request POST "${SHIORI_API_URL}?token=${SHIORI_TOKEN}" \
 ```
 
 `--request PUT` でも同じ形式を使えます。URLだけなら `{"url":"https://example.com/article"}` で登録できます。
+`url` フィールドに説明文やMarkdownリンクを含めても、HTTP/HTTPSのURLが1件なら抽出して登録します。
+例：`{"url":"あとで読む: [記事](https://example.com/article)。"}`。
+URLが見つからない場合や2件以上ある場合は400を返します。抽出したURLにも通常の公開URL検証を適用します。
 どちらも正規化したURLをキーに、トークン所有者のブックマークを登録・更新します。
 同じURLの再送で登録件数は増えません。コメント・タグは置き換え、省略した場合は空になります。
 新しい記事は既存の要約キューに入り、要約は非同期で作成されます（既存の利用上限も適用）。

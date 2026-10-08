@@ -71,3 +71,40 @@ func TestTLDRChangesOnlyWithSuccessfulOwnedJob(t *testing.T) {
 	}
 	check("更新タイトル", "更新本文")
 }
+
+func TestFailedSummarySavesTitle(t *testing.T) {
+	if os.Getenv("FIRESTORE_EMULATOR_HOST") == "" {
+		t.Skip("requires Firestore Emulator")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	c, err := firestore.NewClient(ctx, "demo-title-"+Hash(RandomToken())[:12])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	s := New(c)
+	u := User{ID: Hash(RandomToken()), Name: "reader"}
+	a, err := s.Save(ctx, u, "https://example.com/"+RandomToken(), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, title := range []string{"短い日本語タイトル", ""} {
+		_, lease, err := s.NextQueued(ctx)
+		if err != nil || lease == "" {
+			t.Fatal("claim", err)
+		}
+		if err = s.FinishJob(ctx, a.ID, lease, title, nil, "test", nil, "記事の情報が不足していて要約を作成できませんでした。", nil); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.Get(ctx, a.ID)
+		if err != nil || got.Title != "短い日本語タイトル" || got.Status != "failed" || len(got.Points) != 0 || len(got.TLDR) != 0 {
+			t.Fatalf("failed summary must save a valid title and preserve it on empty retry: %+v %v", got, err)
+		}
+		if title != "" {
+			if _, err = s.Enqueue(ctx, u.ID, a.ID, summary.Concrete); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}

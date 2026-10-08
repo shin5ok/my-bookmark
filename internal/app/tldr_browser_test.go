@@ -49,15 +49,22 @@ func TestTLDRPollingAndAccordionInBrowser(t *testing.T) {
 		var visible, overflow bool
 		var count int
 		var title, location string
+		var titleSize, tldrSize, summarySize float64
 		if err := chromedp.Run(ctx, chromedp.EmulateViewport(width, 900), chromedp.Navigate(server.URL), chromedp.WaitVisible(".tldr", chromedp.ByQuery),
 			chromedp.Evaluate(`document.querySelectorAll('.tldr li').length`, &count),
 			chromedp.Evaluate(`document.querySelector('.summary-content ul').checkVisibility()`, &visible),
 			chromedp.Evaluate(`document.documentElement.scrollWidth > window.innerWidth`, &overflow),
+			chromedp.Evaluate(`parseFloat(getComputedStyle(document.querySelector('.article-title')).fontSize)`, &titleSize),
+			chromedp.Evaluate(`parseFloat(getComputedStyle(document.querySelector('.tldr li')).fontSize)`, &tldrSize),
+			chromedp.Evaluate(`parseFloat(getComputedStyle(document.querySelector('.summary li')).fontSize)`, &summarySize),
 			chromedp.Text(".article-title", &title, chromedp.ByQuery)); err != nil {
 			t.Fatal(err)
 		}
 		if count != 3 || visible || overflow || title != ready.Title {
 			t.Fatalf("width=%d lines=%d full=%t overflow=%t title=%q", width, count, visible, overflow, title)
+		}
+		if titleSize < 19 || tldrSize < 16 || summarySize < 16 {
+			t.Fatalf("width=%d text too small: title=%g tldr=%g summary=%g", width, titleSize, tldrSize, summarySize)
 		}
 		if err := chromedp.Run(ctx, chromedp.Click(".summary-disclosure > summary", chromedp.ByQuery), chromedp.Location(&location), chromedp.Evaluate(`document.querySelector('.summary-content ul').checkVisibility()`, &visible)); err != nil {
 			t.Fatal(err)

@@ -267,6 +267,9 @@ func (s *Store) FinishJob(ctx context.Context, id, lease, title string, points [
 		a.LastError = failure
 		if failure == "" || len(a.Points) == 0 {
 			a.Sources = sources
+			if title != "" {
+				a.Title = title
+			}
 		}
 		if failure == "" {
 			a.Status = "ready"
@@ -277,9 +280,6 @@ func (s *Store) FinishJob(ctx context.Context, id, lease, title string, points [
 			a.Points = points
 			a.TLDR = tldr
 			a.Model = model
-			if title != "" {
-				a.Title = title
-			}
 		} else {
 			a.Status = "failed"
 			a.Stage = "failed"

@@ -51,13 +51,14 @@ type SummaryJob struct {
 	LastError  string        `firestore:"last_error"`
 }
 type Bookmark struct {
-	ArticleID string    `firestore:"article_id"`
-	UserID    string    `firestore:"user_id"`
-	Name      string    `firestore:"name"`
-	Comment   string    `firestore:"comment"`
-	Tags      []string  `firestore:"tags"`
-	CreatedAt time.Time `firestore:"created_at"`
-	UpdatedAt time.Time `firestore:"updated_at"`
+	ArticleID  string    `firestore:"article_id"`
+	UserID     string    `firestore:"user_id"`
+	Name       string    `firestore:"name"`
+	Comment    string    `firestore:"comment"`
+	Tags       []string  `firestore:"tags"`
+	Understood bool      `firestore:"understood"`
+	CreatedAt  time.Time `firestore:"created_at"`
+	UpdatedAt  time.Time `firestore:"updated_at"`
 }
 type Entry struct {
 	Article  Article

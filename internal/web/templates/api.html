@@ -12,7 +12,7 @@
   -H 'Content-Type: application/json' \
   -d '{"url":"https://example.com/article","tags":["技術"]}'</code></pre>{{if .IssuedToken}}<button type="button" class="button secondary" data-copy-target="api-command">トークン入りcurlをコピー</button>{{end}}
 {{else}}<p>APIエンドポイントはデプロイ後に表示されます。</p>{{end}}
-<p>PUTでも同じ形式で登録できます。同じURLは重複登録せず、コメント・タグを更新します。省略したコメント・タグは空になります。GETでは登録できません。</p>
+<p>PUTでも同じ形式で登録できます。urlには「あとで読む: https://example.com/article」のように説明文を含められます。URLが複数ある場合は登録しません。同じURLは重複登録せず、コメント・タグを更新します。省略したコメント・タグは空になります。GETでは登録できません。</p>
 <p class="small-note">トークン付きURLは共有しないでください。外部ツールの履歴やログにも残さないようにしてください。</p>
 </section>
 {{end}}

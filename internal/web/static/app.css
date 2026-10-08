@@ -13,14 +13,15 @@
 /* Compact reading list; full summaries stay inside native disclosures. */
 .feed { gap: 10px; }
 .bookmark { padding: 16px 20px 10px; }
-.article-meta { margin-bottom: 5px; }
-.article-title { margin-bottom: 8px; line-height: 1.45; }
+.article-meta { margin-bottom: 5px; font-size: 12px; }
+.article-title { margin-bottom: 8px; font-size: 20px; line-height: 1.5; }
 .tldr { margin: 0; overflow-wrap: anywhere; }
-.tldr-label { font-size: 10px; font-weight: 700; color: var(--muted); }
+.tldr-label { font-size: 11px; font-weight: 700; color: var(--muted); }
 .tldr ul { list-style: disc; margin: 3px 0 0; padding-left: 1.2rem; }
-.tldr li { margin: 2px 0; line-height: 1.55; font-size: 14px; }
+.tldr li { margin: 2px 0; line-height: 1.7; font-size: 16px; }
 .summary { border: 0; padding: 0; margin: 0 0 4px; }
-.summary-disclosure > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 8px; color: var(--blue); font-size: 13px; list-style: none; }
+.summary li { font-size: 16px; line-height: 1.7; }
+.summary-disclosure > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 8px; color: var(--blue); font-size: 14px; list-style: none; }
 .summary-disclosure > summary::-webkit-details-marker { display: none; }
 .summary-disclosure > summary::before { content: '＋'; }
 .summary-disclosure[open] > summary::before { content: '−'; }
@@ -31,9 +32,16 @@
 .summary-status:empty { display: none; }
 .summary [hidden] { display: none; }
 .bookmark .article-footer { margin-top: 6px; padding-top: 8px; }
+.bookmark.is-understood { background: var(--pale); border-color: #c9daf4; }
+.bookmark.is-understood .article-footer { border-top-color: var(--line); }
+.article-actions { flex-wrap: wrap; justify-content: flex-end; row-gap: 4px; }
+.understood-button { min-height: 44px; padding: 5px 12px; border-radius: 7px; background: var(--paper); color: var(--blue); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.understood-button[aria-pressed="true"] { background: #dceaff; border-color: #a4c5f7; }
+.understood-button:hover:not(:disabled) { border-color: var(--blue); }
 @media (max-width: 680px) {
   .bookmark { padding: 12px 14px 8px; }
-  .article-title { font-size: 17px; }
-  .tldr li { font-size: 14px; }
+  .article-title { font-size: 19px; }
+  .tldr li, .summary li { font-size: 16px; }
+  .article-meta { font-size: 11px; }
   .layout { padding-top: 20px; }
 }

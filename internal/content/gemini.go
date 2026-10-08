@@ -112,8 +112,14 @@ func (g *Gemini) Summarize(ctx context.Context, title, body string, style summar
 	for i := range parsed.Points {
 		parsed.Points[i] = strings.TrimSpace(parsed.Points[i])
 	}
+	title = strings.TrimSpace(parsed.Title)
+	if utf8.RuneCountInString(title) < 4 || utf8.RuneCountInString(title) > 60 || strings.ContainsAny(title, "\r\n<>") || !strings.ContainsFunc(title, func(r rune) bool {
+		return unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana)
+	}) {
+		title = ""
+	}
 	if !parsed.Sufficient {
-		return summary.Result{}, nil
+		return summary.Result{Title: title}, nil
 	}
 	if err := ValidateSummary(parsed.Points); err != nil {
 		return summary.Result{}, err
@@ -124,12 +130,6 @@ func (g *Gemini) Summarize(ctx context.Context, title, body string, style summar
 	}
 	if err := ValidateTLDR(parsed.TLDR); err != nil {
 		return summary.Result{}, err
-	}
-	title = strings.TrimSpace(parsed.Title)
-	if utf8.RuneCountInString(title) < 4 || utf8.RuneCountInString(title) > 60 || strings.ContainsAny(title, "\r\n<>") || !strings.ContainsFunc(title, func(r rune) bool {
-		return unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana)
-	}) {
-		title = ""
 	}
 	return summary.Result{Title: title, Points: parsed.Points, TLDR: parsed.TLDR}, nil
 }

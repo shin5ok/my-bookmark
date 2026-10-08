@@ -19,6 +19,8 @@ func TestGeminiStructuredResponse(t *testing.T) {
 		wantErr              bool
 	}{
 		{"valid", `{"sufficient":true,"title":"新しい技術の要点","tldr":["結論の短文","重要性の短文","影響の短文"],"points":["結論","理由"]}`, "STOP", 200, false},
+		{"insufficient", `{"sufficient":false,"title":"短い日本語タイトル","tldr":[],"points":[]}`, "STOP", 200, false},
+		{"insufficient invalid title", `{"sufficient":false,"title":"<不正なタイトル>","tldr":["根拠のない短文"],"points":["根拠のない要約"]}`, "STOP", 200, false},
 		{"invalid title", `{"sufficient":true,"title":"An English title","tldr":["結論の短文","重要性の短文","影響の短文"],"points":["結論","理由"]}`, "STOP", 200, false},
 		{"long title", `{"sufficient":true,"title":"` + strings.Repeat("長", 61) + `","tldr":["結論の短文","重要性の短文","影響の短文"],"points":["結論","理由"]}`, "STOP", 200, false},
 		{"missing TLDR", `{"sufficient":true,"title":"日本語タイトル","points":["結論","理由"]}`, "STOP", 200, true},
@@ -70,6 +72,16 @@ func TestGeminiStructuredResponse(t *testing.T) {
 			result, err := g.Summarize(context.Background(), "title", "article body", summary.Standard)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("result=%v err=%v", result, err)
+			}
+			if strings.HasPrefix(tc.name, "insufficient") {
+				wantTitle := "短い日本語タイトル"
+				if tc.name == "insufficient invalid title" {
+					wantTitle = ""
+				}
+				if result.Title != wantTitle || len(result.Points) != 0 || len(result.TLDR) != 0 {
+					t.Fatalf("insufficient content must retain only a valid title: %+v", result)
+				}
+				return
 			}
 			if !tc.wantErr && len(result.Points) != 2 {
 				t.Fatalf("points %v", result.Points)

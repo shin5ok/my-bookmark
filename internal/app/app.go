@@ -33,6 +33,7 @@ type Database interface {
 	Own(context.Context, string, string) (*store.Bookmark, error)
 	Save(context.Context, store.User, string, string, []string) (store.Article, error)
 	Delete(context.Context, string, string) error
+	SetUnderstood(context.Context, string, string, bool) error
 	Comments(context.Context, string) ([]store.Bookmark, error)
 	Claim(context.Context, string, string) (string, error)
 	Finish(context.Context, string, string, string, []string, string, bool) error
@@ -124,6 +125,7 @@ func (a *App) Handler() http.Handler {
 			r.Post("/settings/api/revoke", a.revokeToken)
 			r.Post("/bookmarks", a.save)
 			r.Post("/bookmarks/{id}/delete", a.remove)
+			r.Post("/bookmarks/{id}/understood", a.setUnderstood)
 			r.Post("/articles/{id}/summary", a.generate)
 			r.Post("/logout", a.logout)
 		})
