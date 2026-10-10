@@ -19,11 +19,12 @@ type Link struct {
 	Score int
 }
 type Document struct {
-	URL   string
-	Title string
-	Text  string
-	HTML  []byte
-	Links []Link
+	URL         string
+	Title       string
+	Text        string
+	HTML        []byte
+	Links       []Link
+	ContentType string
 }
 
 // FetchDocument performs one SSRF-checked request and returns document-relative links.
@@ -70,7 +71,7 @@ func FetchDocument(ctx context.Context, client *http.Client, raw string) (Docume
 	if err != nil {
 		return Document{}, err
 	}
-	return Document{URL: finalURL, Title: title, Text: text, HTML: data, Links: links}, nil
+	return Document{URL: finalURL, Title: title, Text: text, HTML: data, Links: links, ContentType: ctype}, nil
 }
 
 // DocumentLinks extracts direct anchors from the HTML and ranks likely article links.

@@ -67,7 +67,7 @@
 .rating-clear { min-height: 44px; padding: 4px 8px; border: 0; color: var(--muted); font-size: 12px; }
 @media (max-width: 640px) {
   .sidebar nav { flex-wrap: wrap; align-items: flex-start; }
-  .mine-menu { flex: 1; }
+  .mine-menu { flex: 1 0 100%; }
   .sidebar nav .mine-submenu { padding: 4px 10px; justify-content: center; }
   .rating-label { flex-basis: 100%; }
 }

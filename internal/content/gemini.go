@@ -42,67 +42,9 @@ func (g *Gemini) generate(ctx context.Context, title string, parts []any, instru
 		"tldr":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 0, "maxItems": 5},
 		"points":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 0, "maxItems": 5},
 	}, "required": []string{"sufficient", "title", "points", "tldr"}}
-	payload := map[string]any{
-		"systemInstruction": map[string]any{"parts": []any{map[string]string{"text": instruction}}},
-		"contents":          []any{map[string]any{"role": "user", "parts": parts}},
-		"generationConfig":  map[string]any{"responseMimeType": "application/json", "responseJsonSchema": schema, "maxOutputTokens": 4096},
-	}
-	data, err := json.Marshal(payload)
+	output, err := g.generateJSON(ctx, parts, instruction, schema, timeout)
 	if err != nil {
 		return summary.Result{}, err
-	}
-	endpoint := g.Endpoint
-	if endpoint == "" {
-		endpoint = "https://" + g.Location + "-aiplatform.googleapis.com"
-		if g.Location == "global" {
-			endpoint = "https://aiplatform.googleapis.com"
-		}
-	}
-	path := "/v1/projects/" + url.PathEscape(g.Project) + "/locations/" + url.PathEscape(g.Location) + "/publishers/google/models/" + url.PathEscape(g.Model) + ":generateContent"
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint+path, bytes.NewReader(data))
-	if err != nil {
-		return summary.Result{}, err
-	}
-	token, err := g.TokenSource.Token()
-	if err != nil {
-		return summary.Result{}, fmt.Errorf("get ADC access token: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
-	client := g.Client
-	if client == nil {
-		client = &http.Client{Timeout: timeout}
-	}
-	res, err := client.Do(req)
-	if err != nil {
-		return summary.Result{}, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		return summary.Result{}, &APIError{Status: res.StatusCode}
-	}
-	var result struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text    string
-					Thought bool
-				}
-			}
-			FinishReason string
-		}
-	}
-	if err := json.NewDecoder(io.LimitReader(res.Body, 1024*1024)).Decode(&result); err != nil {
-		return summary.Result{}, err
-	}
-	if len(result.Candidates) == 0 || result.Candidates[0].FinishReason != "STOP" {
-		return summary.Result{}, errors.New("Gemini did not complete a summary")
-	}
-	var output strings.Builder
-	for _, part := range result.Candidates[0].Content.Parts {
-		if !part.Thought {
-			output.WriteString(part.Text)
-		}
 	}
 	var parsed struct {
 		Sufficient bool     `json:"sufficient"`
@@ -110,7 +52,7 @@ func (g *Gemini) generate(ctx context.Context, title string, parts []any, instru
 		Title      string   `json:"title"`
 		Points     []string `json:"points"`
 	}
-	if err := json.Unmarshal([]byte(output.String()), &parsed); err != nil {
+	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
 		return summary.Result{}, err
 	}
 	for i := range parsed.Points {
@@ -151,4 +93,77 @@ func ValidateTLDR(lines []string) error {
 		seen[line] = true
 	}
 	return nil
+}
+
+// generateJSON shares authenticated transport and completed-response checks across
+// image selection and the final summary, with a separate schema for each task.
+func (g *Gemini) generateJSON(ctx context.Context, parts []any, instruction string, schema map[string]any, timeout time.Duration) (string, error) {
+	if g.Project == "" || g.Location == "" || g.Model == "" || g.TokenSource == nil {
+		return "", errors.New("Gemini Vertex AI configuration is incomplete")
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	payload := map[string]any{
+		"systemInstruction": map[string]any{"parts": []any{map[string]string{"text": instruction}}},
+		"contents":          []any{map[string]any{"role": "user", "parts": parts}},
+		"generationConfig":  map[string]any{"responseMimeType": "application/json", "responseJsonSchema": schema, "maxOutputTokens": 4096},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	endpoint := g.Endpoint
+	if endpoint == "" {
+		endpoint = "https://" + g.Location + "-aiplatform.googleapis.com"
+		if g.Location == "global" {
+			endpoint = "https://aiplatform.googleapis.com"
+		}
+	}
+	path := "/v1/projects/" + url.PathEscape(g.Project) + "/locations/" + url.PathEscape(g.Location) + "/publishers/google/models/" + url.PathEscape(g.Model) + ":generateContent"
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint+path, bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	token, err := g.TokenSource.Token()
+	if err != nil {
+		return "", fmt.Errorf("get ADC access token: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
+	client := g.Client
+	if client == nil {
+		client = &http.Client{Timeout: timeout}
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		return "", &APIError{Status: res.StatusCode}
+	}
+	var result struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text    string
+					Thought bool
+				}
+			}
+			FinishReason string
+		}
+	}
+	if err := json.NewDecoder(io.LimitReader(res.Body, 1024*1024)).Decode(&result); err != nil {
+		return "", err
+	}
+	if len(result.Candidates) == 0 || result.Candidates[0].FinishReason != "STOP" {
+		return "", errors.New("Gemini did not complete a summary")
+	}
+	var output strings.Builder
+	for _, part := range result.Candidates[0].Content.Parts {
+		if !part.Thought {
+			output.WriteString(part.Text)
+		}
+	}
+	return output.String(), nil
 }

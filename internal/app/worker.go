@@ -121,12 +121,17 @@ func (w *Worker) processAttempt(parent context.Context, id, lease string, style 
 		} else {
 			title = doc.Title
 			sources = []string{doc.URL}
-			if len([]rune(doc.Text)) >= 1200 {
+			var images []content.Image
+			attemptedImages := map[string]bool{}
+			if e := w.collectImages(ctx, id, lease, doc, &images, attemptedImages, &sources); e != nil {
+				return e
+			}
+			if len([]rune(doc.Text)) >= 1200 || len(images) > 0 {
 				if e := w.stage(ctx, id, lease, "summarizing", "記事の要点を確認しています", sources); e != nil {
 					return e
 				} else {
 					var result summary.Result
-					result, err = w.summary.Summarize(ctx, title, doc.Text, style)
+					result, err = w.summarizeArticle(ctx, title, doc.Text, images, style)
 					points, generatedTitle, tldr = result.Points, result.Title, result.TLDR
 					if err != nil {
 						failure = "要約を作成できませんでした。"
@@ -146,6 +151,13 @@ func (w *Worker) processAttempt(parent context.Context, id, lease string, style 
 						}
 						doc.Text = rendered.Text
 						doc.Links = mergeLinks(doc.Links, rendered.Links, doc.URL)
+						if len(rendered.HTML) > 0 {
+							doc.HTML = rendered.HTML
+							doc.ContentType = "text/html; charset=utf-8"
+						}
+						if e := w.collectImages(ctx, id, lease, doc, &images, attemptedImages, &sources); e != nil {
+							return e
+						}
 					}
 				}
 				if failure == "" {
@@ -178,7 +190,7 @@ func (w *Worker) processAttempt(parent context.Context, id, lease string, style 
 							return e
 						} else {
 							var result summary.Result
-							result, err = w.summary.Summarize(ctx, title, input, style)
+							result, err = w.summarizeArticle(ctx, title, input, images, style)
 							points, generatedTitle, tldr = result.Points, result.Title, result.TLDR
 							if err != nil {
 								failure = "要約を作成できませんでした。"
@@ -221,6 +233,66 @@ func (w *Worker) processAttempt(parent context.Context, id, lease string, style 
 		slog.Warn("summary job failed", "article", id, "stage", failure)
 	}
 	return nil
+}
+
+type imageSummarizer interface {
+	SelectImages(context.Context, string, string, []content.ImageCandidate, int) ([]content.ImageCandidate, error)
+	SummarizeWithImages(context.Context, string, string, []content.Image, summary.Style) (summary.Result, error)
+}
+
+// collectImages shares a download budget across the initial and rendered page.
+// Optional image failures leave text summarization available; job-stage errors
+// still propagate so a lost lease never continues processing.
+func (w *Worker) collectImages(ctx context.Context, id, lease string, doc content.Document, images *[]content.Image, attempted map[string]bool, sources *[]string) error {
+	model, supported := w.summary.(imageSummarizer)
+	remaining := content.MaxSummaryImages - len(attempted)
+	if !supported || remaining <= 0 {
+		return nil
+	}
+	var candidates []content.ImageCandidate
+	allowed := map[string]content.ImageCandidate{}
+	for _, candidate := range content.DocumentImages(doc.HTML, doc.ContentType, doc.URL) {
+		if !attempted[candidate.URL] {
+			candidates = append(candidates, candidate)
+			allowed[candidate.URL] = candidate
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	if err := w.stage(ctx, id, lease, "selecting_images", "要約に役立つ図表・説明画像を選んでいます", *sources); err != nil {
+		return err
+	}
+	selected, err := model.SelectImages(ctx, doc.Title, doc.Text, candidates, remaining)
+	if err != nil {
+		slog.Warn("image selection skipped", "article", id, "error", err)
+		return nil
+	}
+	for _, selection := range selected {
+		candidate, valid := allowed[selection.URL]
+		if !valid || attempted[candidate.URL] || len(attempted) >= content.MaxSummaryImages {
+			continue
+		}
+		attempted[candidate.URL] = true
+		if err := w.stage(ctx, id, lease, "fetching_images", fmt.Sprintf("重要な画像を取得しています（%d/%d）", len(attempted), content.MaxSummaryImages), *sources); err != nil {
+			return err
+		}
+		img, err := content.FetchImage(ctx, w.fetcher, candidate)
+		if err != nil {
+			slog.Warn("article image skipped", "article", id, "error", err)
+			continue
+		}
+		*images = append(*images, img)
+		*sources = append(*sources, candidate.URL)
+	}
+	return nil
+}
+
+func (w *Worker) summarizeArticle(ctx context.Context, title, body string, images []content.Image, style summary.Style) (summary.Result, error) {
+	if model, supported := w.summary.(imageSummarizer); supported && len(images) > 0 {
+		return model.SummarizeWithImages(ctx, title, body, images, style)
+	}
+	return w.summary.Summarize(ctx, title, body, style)
 }
 func (w *Worker) stage(ctx context.Context, id, lease, stage, progress string, sources []string) error {
 	return w.db.UpdateStage(ctx, id, lease, stage, progress, sources)

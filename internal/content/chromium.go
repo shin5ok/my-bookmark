@@ -97,5 +97,5 @@ func (r *ChromeRenderer) Render(parent context.Context, source []byte, base stri
 	if value.Title != "" {
 		title = value.Title
 	}
-	return Document{URL: base, Title: truncate(title, 240), Text: truncate(strings.Join(strings.Fields(value.Text), " "), 24000), HTML: []byte(value.HTML), Links: links}, nil
+	return Document{URL: base, Title: truncate(title, 240), Text: truncate(strings.Join(strings.Fields(value.Text), " "), 24000), HTML: []byte(value.HTML), Links: links, ContentType: "text/html; charset=utf-8"}, nil
 }
