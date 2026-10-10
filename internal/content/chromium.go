@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -17,13 +18,28 @@ type ChromeRenderer struct{ timeout time.Duration }
 
 func NewChromeRenderer() *ChromeRenderer { return &ChromeRenderer{timeout: 15 * time.Second} }
 
+// Check verifies browser startup and script execution before accepting summary work.
+func (r *ChromeRenderer) Check(ctx context.Context) error {
+	if os.Getuid() == 0 {
+		return errors.New("sandboxed Chromium must run as a non-root user")
+	}
+	doc, err := r.Render(ctx, []byte(`<html><head><title>Sandbox startup check</title></head><body><script>document.body.textContent = "sandbox-render-ok";</script></body></html>`), "https://example.com/")
+	if err != nil {
+		return fmt.Errorf("start sandboxed Chromium: %w", err)
+	}
+	if doc.Title != "Sandbox startup check" || doc.Text != "sandbox-render-ok" {
+		return errors.New("sandboxed Chromium startup check did not render the expected content")
+	}
+	return nil
+}
+
 // Render executes inline page scripts in an isolated blank page. The only network path
 // offered to page code is an intentionally dead proxy; links are fetched by our Go client.
 func (r *ChromeRenderer) Render(parent context.Context, source []byte, base string) (Document, error) {
 	ctx, cancel := context.WithTimeout(parent, r.timeout)
 	defer cancel()
 	options := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("no-sandbox", true), chromedp.Flag("disable-gpu", true), chromedp.Flag("disable-background-networking", true), chromedp.Flag("disable-extensions", true), chromedp.Flag("disable-sync", true), chromedp.Flag("disable-dev-shm-usage", true), chromedp.Flag("dns-prefetch-disable", true), chromedp.Flag("force-webrtc-ip-handling-policy", "disable_non_proxied_udp"), chromedp.Flag("disable-component-update", true), chromedp.Flag("no-first-run", true), chromedp.Flag("proxy-server", "http://127.0.0.1:9"), chromedp.Flag("proxy-bypass-list", "<-loopback>"),
+		chromedp.Flag("no-sandbox", false), chromedp.Flag("disable-gpu", true), chromedp.Flag("disable-background-networking", true), chromedp.Flag("disable-extensions", true), chromedp.Flag("disable-sync", true), chromedp.Flag("disable-dev-shm-usage", true), chromedp.Flag("dns-prefetch-disable", true), chromedp.Flag("force-webrtc-ip-handling-policy", "disable_non_proxied_udp"), chromedp.Flag("disable-component-update", true), chromedp.Flag("no-first-run", true), chromedp.Flag("proxy-server", "http://127.0.0.1:9"), chromedp.Flag("proxy-bypass-list", "<-loopback>"),
 	)
 	if path := os.Getenv("CHROME_BIN"); path != "" {
 		options = append(options, chromedp.ExecPath(path))

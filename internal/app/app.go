@@ -114,6 +114,8 @@ func (a *App) Handler() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(a.withSession)
 		r.Get("/", a.feed)
+		r.Get("/new", a.feed)
+		r.Get("/popular", a.feed)
 		r.Get("/mine", a.feed)
 		r.With(a.requireSession).Get("/settings/api", a.tokenSettings)
 		r.Get("/articles/{id}", a.detail)

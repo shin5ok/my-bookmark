@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -23,9 +24,25 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+func checkChromium(ctx context.Context, cfg app.Config, check func(context.Context) error) error {
+	if !cfg.WorkerOnly && (cfg.APIOnly || cfg.TasksQueue != "") {
+		return nil
+	}
+	if err := check(ctx); err != nil {
+		return fmt.Errorf("Chromium sandbox startup check failed: %w", err)
+	}
+	return nil
+}
+
 func run() error {
 	cfg, err := app.LoadConfig()
 	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := checkChromium(ctx, cfg, content.NewChromeRenderer().Check); err != nil {
 		return err
 	}
 	db, err := firestore.NewClient(context.Background(), cfg.Project)
@@ -33,8 +50,6 @@ func run() error {
 		return err
 	}
 	defer db.Close()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	tokenSource, err := google.DefaultTokenSource(ctx, "https://www.googleapis.com/auth/cloud-platform")
 	if err != nil {
 		return err

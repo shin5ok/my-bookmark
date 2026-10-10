@@ -59,7 +59,7 @@ func TestFeedEscapesSummary(t *testing.T) {
 	a := testApp(t)
 	a.db = testDB{entries: []store.Entry{{Article: store.Article{ID: strings.Repeat("a", 64), URL: "https://example.com/", Title: "記事", Domain: "example.com", Status: "ready", Points: []string{"<script>alert(1)</script>"}, Count: 1}}}}
 	w := httptest.NewRecorder()
-	a.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	a.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/new", nil))
 	if w.Code != 200 {
 		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}

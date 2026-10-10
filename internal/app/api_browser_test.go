@@ -78,18 +78,32 @@ func TestTokenIssueBrowserFormOrigin(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	var token, command string
-	if err := chromedp.Run(ctx, chromedp.WaitVisible("#api-token", chromedp.ByQuery), chromedp.Value("#api-token", &token, chromedp.ByQuery), chromedp.Text("#api-command", &command, chromedp.ByQuery)); err != nil {
+	var token, command, headerCommand string
+	if err := chromedp.Run(ctx, chromedp.WaitVisible("#api-token", chromedp.ByQuery), chromedp.Value("#api-token", &token, chromedp.ByQuery), chromedp.Text("#api-command", &command, chromedp.ByQuery), chromedp.Text("#api-header-command", &headerCommand, chromedp.ByQuery)); err != nil {
 		t.Fatal(err)
 	}
 	if len(token) != 108 || !strings.Contains(command, "?token="+token+"'") {
 		t.Fatal("displayed token and curl do not match")
 	}
-	r := httptest.NewRequest("POST", "/api/bookmarks?token="+url.QueryEscape(token), strings.NewReader(`{"url":"https://example.com/article"}`))
-	r.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	a.Handler().ServeHTTP(w, r)
-	if w.Code != 200 {
-		t.Fatalf("browser-issued token rejected: status=%d", w.Code)
+	if !strings.Contains(headerCommand, "-H 'x-shiori-api: "+token+"'") || strings.Contains(headerCommand, "?token=") {
+		t.Fatal("displayed header curl does not match token")
+	}
+	for _, method := range []string{"query", "header"} {
+		t.Run(method, func(t *testing.T) {
+			target := "/api/bookmarks"
+			if method == "query" {
+				target += "?token=" + url.QueryEscape(token)
+			}
+			r := httptest.NewRequest("POST", target, strings.NewReader(`{"url":"https://example.com/article"}`))
+			r.Header.Set("Content-Type", "application/json")
+			if method == "header" {
+				r.Header.Set("x-shiori-api", token)
+			}
+			w := httptest.NewRecorder()
+			a.Handler().ServeHTTP(w, r)
+			if w.Code != 200 {
+				t.Fatalf("browser-issued token rejected: status=%d", w.Code)
+			}
+		})
 	}
 }

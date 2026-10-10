@@ -62,12 +62,16 @@ func (a *App) saveAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	values := q["token"]
-	if len(values) == 0 || (len(values) == 1 && values[0] == "") {
-		apiTokenError(w, "token_missing", "URLのクエリパラメータ token に、発行したトークンを指定してください。")
+	headers := r.Header.Values("X-Shiori-Api")
+	if (len(values) > 0 && len(headers) > 0) || len(values) > 1 || len(headers) > 1 || (len(headers) == 1 && strings.Contains(headers[0], ",")) {
+		apiTokenError(w, "token_ambiguous", "URLのクエリパラメータ token または x-shiori-api ヘッダーのどちらか一方に、トークンを1つだけ指定してください。")
 		return
 	}
-	if len(values) != 1 {
-		apiTokenError(w, "token_ambiguous", "クエリパラメータ token は1つだけ指定してください。")
+	if len(headers) > 0 {
+		values = headers
+	}
+	if len(values) == 0 || strings.TrimSpace(values[0]) == "" {
+		apiTokenError(w, "token_missing", "URLのクエリパラメータ token または x-shiori-api ヘッダーに、発行したトークンを指定してください。")
 		return
 	}
 	// Tokens use only URL-safe ASCII; surrounding clipboard whitespace is not part of the secret.

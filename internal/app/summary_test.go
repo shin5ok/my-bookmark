@@ -107,7 +107,7 @@ func TestTLDRShowsCollapsedSummaryOnSamePage(t *testing.T) {
 	article := store.Article{ID: id, Title: "短い日本語タイトル", URL: "https://example.com/", Status: "ready", Points: []string{"具体的な要約本文"}, TLDR: []string{"結論の短文", "重要性の短文", "<script>悪意</script>"}}
 	db := &summaryTestDB{testDB: testDB{entries: []store.Entry{{Article: article}}}, article: article}
 	a.db = db
-	for _, path := range []string{"/", "/articles/" + id} {
+	for _, path := range []string{"/new", "/articles/" + id} {
 		w := httptest.NewRecorder()
 		a.Handler().ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 		html := w.Body.String()

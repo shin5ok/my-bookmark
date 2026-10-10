@@ -68,7 +68,7 @@ func TestTLDRPollingAndAccordionInBrowser(t *testing.T) {
 		var count int
 		var title, location string
 		var titleSize, tldrSize, summarySize float64
-		if err := chromedp.Run(ctx, chromedp.EmulateViewport(width, 900), chromedp.Navigate(server.URL), chromedp.WaitVisible(".tldr", chromedp.ByQuery),
+		if err := chromedp.Run(ctx, chromedp.EmulateViewport(width, 900), chromedp.Navigate(server.URL+"/new"), chromedp.WaitVisible(".tldr", chromedp.ByQuery),
 			chromedp.Evaluate(`document.querySelectorAll('.tldr li').length`, &count),
 			chromedp.Evaluate(`document.querySelector('.summary-content ul').checkVisibility()`, &visible),
 			chromedp.Evaluate(`document.documentElement.scrollWidth > window.innerWidth`, &overflow),
@@ -87,7 +87,7 @@ func TestTLDRPollingAndAccordionInBrowser(t *testing.T) {
 		if err := chromedp.Run(ctx, chromedp.Click(".summary-disclosure > summary", chromedp.ByQuery), chromedp.Location(&location), chromedp.Evaluate(`document.querySelector('.summary-content ul').checkVisibility()`, &visible)); err != nil {
 			t.Fatal(err)
 		}
-		if !visible || location != server.URL+"/" {
+		if !visible || location != server.URL+"/new" {
 			t.Fatalf("accordion navigated or did not open: %t %s", visible, location)
 		}
 		if err := chromedp.Run(ctx, chromedp.Click(".summary-disclosure > summary", chromedp.ByQuery), chromedp.Evaluate(`document.querySelector('.summary-content ul').checkVisibility()`, &visible)); err != nil {

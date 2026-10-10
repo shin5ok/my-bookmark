@@ -41,13 +41,25 @@ func (a *App) problem(w http.ResponseWriter, r *http.Request, status int, messag
 	a.render(w, r, status, Page{Title: "操作を確認してください", Error: message})
 }
 func (a *App) feed(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/" {
+		query := r.URL.Query()
+		if sort := query.Get("sort"); sort == "new" || sort == "popular" {
+			query.Del("sort")
+			target := "/" + sort
+			if encoded := query.Encode(); encoded != "" {
+				target += "?" + encoded
+			}
+			http.Redirect(w, r, target, http.StatusFound)
+			return
+		}
+	}
 	mode := "new"
 	title := "新着ブックマーク"
-	if r.URL.Query().Get("sort") == "popular" {
+	if r.URL.Path == "/popular" {
 		mode = "popular"
 		title = "人気のブックマーク"
 	}
-	if r.URL.Path == "/mine" {
+	if r.URL.Path == "/mine" || r.URL.Path == "/" {
 		mode = "mine"
 		title = "マイブックマーク"
 		if r.URL.Query().Get("filter") == "unread" {
@@ -76,12 +88,12 @@ func (a *App) feed(w http.ResponseWriter, r *http.Request) {
 	nextURL := ""
 	if next != "" {
 		if mode == "mine" || mode == "unread" {
-			nextURL = "/mine?cursor=" + next
+			nextURL = "/?cursor=" + next
 			if mode == "unread" {
 				nextURL += "&filter=unread"
 			}
 		} else {
-			nextURL = "/?sort=" + mode + "&cursor=" + next
+			nextURL = "/" + mode + "?cursor=" + next
 		}
 	}
 	a.render(w, r, 200, Page{Title: title, Mode: mode, Entries: entries, Next: nextURL})

@@ -26,7 +26,7 @@ func TestPreviewServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log("Test-only sample preview: http://localhost:8090 (all articles are fictional)")
+	t.Log("Test-only sample preview: http://localhost:8090/new (all articles are fictional)")
 	if err := http.ListenAndServe("127.0.0.1:8090", a.Handler()); err != nil {
 		t.Fatal(err)
 	}

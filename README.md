@@ -24,14 +24,16 @@ Go + chiで作る、IAPで保護されたブックマークサービスです。
 
 ### メニュー
 
+`/` はマイブックマークのページです。ログイン済みなら自分のブックマークを直接表示し、未ログインならログイン画面へ進みます。既存の `/mine` も同じ一覧を表示します。新着は `/new`、人気は `/popular` です。旧URLの `/?sort=new`・`/?sort=popular` は対応する新しいパスへ転送し、ページ送りの指定も引き継ぎます。
+
 起動時から、メニューの一番上に「マイブックマーク」とサブメニュー「まだ」を表示します。PCではサイドバーの先頭、スマートフォンでは「新着」「人気」より上の行に表示します。
 
 | メニュー | 表示する内容 |
 | --- | --- |
-| マイブックマーク | 自分が保存した記事を、保存日時の新しい順に表示 |
-| まだ | 自分のブックマークのうち、理解済みにしていない記事だけを表示 |
-| 新着 | 保存された記事を新しい順に表示 |
-| 人気 | 全ユーザーの星の合計が多い順に表示 |
+| マイブックマーク（`/`） | 自分が保存した記事を、保存日時の新しい順に表示 |
+| まだ（`/?filter=unread`） | 自分のブックマークのうち、理解済みにしていない記事だけを表示 |
+| 新着（`/new`） | 保存された記事を新しい順に表示 |
+| 人気（`/popular`） | 全ユーザーの星の合計が多い順に表示 |
 
 「まだ」は未理解の状態を示します。記事を開いたかどうかによる既読・未読の判定ではありません。理解状態が未保存の古いブックマークも対象です。
 
@@ -147,6 +149,18 @@ URLを保存
 
 ローカル開発では `WORKER_ONLY=false`、`API_ONLY=false` とし、`TASKS_QUEUE`・`TASKS_WORKER_URL`・`TASKS_SERVICE_ACCOUNT` を空欄にします。画面と同じプロセスがFirestoreの待機ジョブを直接処理するため、ローカルでCloud Tasksを構築する必要はありません。
 
+### Chromiumのsandbox
+
+記事の描画に使うChromiumはsandboxを有効にして起動します。`no-sandbox=false` を明示し、chromedpがroot実行時にsandboxを自動無効化する動作も防ぎます。描画を行うプロセスは非rootで実行してください。コンテナは `USER 65532:65532` を使用します。
+
+専用ワーカーとローカルの直接実行ワーカーは、DB接続・ジョブ処理・HTTP待ち受けの前に、外部通信のないHTMLでChromium起動・JavaScript実行・本文抽出を確認します。root実行、ブラウザー未検出、sandbox非対応などで起動チェックに失敗した場合はプロセスを停止します。sandboxを無効化して再起動するフォールバックはありません。API専用サービスとCloud Tasksのディスパッチャーは描画しないため、このチェックを行いません。
+
+`make deploy` は専用ワーカーに `--execution-environment=gen2` を指定します。Linuxのnamespace sandbox・seccompが利用できる実行環境が必要であり、gen2指定だけで動作を保証するものではありません。Cloud Runはsetuid helperによる権限昇格をサポートしません。
+
+ローカルでブラウザーを自動検出できない場合は、`.env` に `CHROME_BIN=/実際の/ChromeまたはChromiumのパス` を設定してください。起動チェックには通常の描画タイムアウト（15秒）を適用し、約1.2秒の描画待機があります。
+
+テストではsandbox無効化引数が渡されないこと、起動失敗時に再起動しないこと、チェック対象のサービス分岐、起動失敗時のサーバー停止、インストール済みChromeでの描画を確認します。ローカルのmacOSテストはLinuxのnamespace・seccompの有効状態を証明しません。本番反映前に同じイメージを使ったCloud Runの検証用ワーカーで起動と描画、およびrendererのsandbox状態を確認してください。コンテナ側のseccomp設定だけをChromiumのsandboxの証拠として扱わないでください。
+
 ## 必要なもの
 
 - Go 1.26.8（`go.mod`のtoolchain指定で自動取得）
@@ -186,7 +200,7 @@ make vet                # 静的解析
 make build              # bin/server
 make test-integration   # 起動済みEmulatorで統合テスト
 make emulator-stop      # Emulator停止（データは永続化しません）
-make preview            # localhost:8090、架空記事による画面確認のみ
+make preview            # localhost:8090/new、架空記事の画面確認
 ```
 
 `make test`ではEmulator依存のテストをスキップします。`make test-integration`は実際のFirestoreクライアントでトランザクション、二重保存、所有者チェック、要約リース、期限切れセッション等を検証します。テスト用プロジェクトは`demo-bookmark-test`です。Emulatorは本番の複合インデックス要件を完全には検証しません。
@@ -351,8 +365,20 @@ scripts/             初期構築、Secret登録、インデックス、デプ�
 再発行すると旧トークンが無効になります。「トークンを失効」でも停止できます。
 Firestoreの `api_tokens` にはトークンのSHA-256ハッシュ・所有者・メールアドレス・有効期限を保存し、平文トークンは保存しません。
 
-画面に表示されるAPIエンドポイントに、クエリパラメータ `token` を付けて送信します。
+画面に表示されるAPIエンドポイントへ、`x-shiori-api` ヘッダーまたはURLのクエリパラメータ `token` でトークンを送信できます。
+どちらか一方に1つだけ指定してください。両方の同時指定や複数指定はHTTP 401（`token_ambiguous`）になります。
 `SHIORI_TOKEN` は発行したトークン、`SHIORI_API_URL` は画面のAPIエンドポイントです。
+
+ヘッダー方式（URLにトークンを含めません）：
+
+```bash
+curl --request POST "${SHIORI_API_URL}" \
+  --header "x-shiori-api: ${SHIORI_TOKEN}" \
+  --header 'Content-Type: application/json' \
+  --data '{"url":"https://example.com/article","comment":"あとで読む","tags":["技術","Go"]}'
+```
+
+URLパラメータ方式：
 
 ```bash
 curl --request POST "${SHIORI_API_URL}?token=${SHIORI_TOKEN}" \
@@ -404,8 +430,8 @@ APIサービスのCloud Runリクエストログ除外を追加します（再�
 
 認証エラーは `error` に加え、`code` と日本語の `message` を返します。
 
-- `token_missing`：URLの `token` パラメータがない、または空です。
-- `token_ambiguous`：`token` パラメータが複数あります。
+- `token_missing`：URLの `token` パラメータと `x-shiori-api` ヘッダーのどちらもない、または指定した値が空です。
+- `token_ambiguous`：両方式を同時に指定した、またはトークンを複数指定しています（カンマ区切りのヘッダーも含みます）。
 - `token_malformed`：コピーした値が所定の形式ではありません。トークンは108文字（64文字のID、ドット、43文字の秘密値）です。
 - `token_invalid`：現在のトークンと一致しません。発行元のAPIエンドポイントと最新のトークンを確認してください。再発行・失効すると旧トークンは使えません。
 - `token_expired`：一致したトークンの有効期限が切れています。画面から再発行してください。
@@ -421,7 +447,7 @@ curl -X POST "https://APIホスト/api/bookmarks?token=${SHIORI_API_TOKEN}" \
   -d '{"url":"https://example.com/article"}'
 ```
 
-発行直後の画面にはトークン全体と、発行した値を埋め込んだcurlをコピーするボタンがあります。
+発行直後の画面にはトークン全体と、発行した値を埋め込んだヘッダー版・URL版のcurlをそれぞれコピーするボタンがあります。
 APIはコピー時に付いた前後の空白・改行を除去してから検証します（内部の文字は変更しません）。
 
 初回のURL登録時も、要約完了時にAIが生成した簡潔な日本語タイトルへ更新します。生成タイトルが得られない場合は、取得元の記事タイトルを使用します。

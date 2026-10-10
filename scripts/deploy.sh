@@ -29,6 +29,7 @@ gcloud tasks queues "$queue_action" "$queue" --project="$PROJECT_ID" --location=
   --min-backoff=30s --max-backoff=600s --max-retry-duration=0s --quiet
 tasks_env="TASKS_QUEUE=$queue_resource,TASKS_WORKER_URL=$worker_url,TASKS_SERVICE_ACCOUNT=$TASKS_SA"
 gcloud run deploy "$worker_service" --image="$image" --project="$PROJECT_ID" --region="$REGION" \
+  --execution-environment=gen2 \
   --service-account="$RUNTIME_SA" \
   --no-allow-unauthenticated --no-iap --port=8080 --cpu=1 --memory=2Gi --concurrency=1 --timeout=660 --cpu-throttling \
   --min=0 --max=3 \

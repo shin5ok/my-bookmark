@@ -56,6 +56,9 @@ if [[ "$1 $2 $3" == 'artifacts repositories describe' && "${MISSING_REPO:-}" == 
 		t.Fatalf("worker must be ready before the dispatcher: %s", calls)
 	}
 	workerCommand := strings.Split(calls[workerDeploy:], "\n")[0]
+	if !strings.Contains(workerCommand, "--execution-environment=gen2") {
+		t.Fatalf("sandboxed Chromium requires an explicit gen2 worker: %s", workerCommand)
+	}
 	if !strings.Contains(workerCommand, "--no-allow-unauthenticated --no-iap") || !strings.Contains(workerCommand, "WORKER_ONLY=true") || !strings.Contains(workerCommand, "--timeout=660") || !strings.Contains(workerCommand, "--concurrency=1") {
 		t.Fatalf("worker isolation or long request budget missing: %s", workerCommand)
 	}
