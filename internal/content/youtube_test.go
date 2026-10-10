@@ -65,7 +65,7 @@ func TestGeminiSendsYouTubeAsVideo(t *testing.T) {
 	}))
 	defer server.Close()
 	g := &Gemini{Project: "test", Location: "global", Model: "test", TokenSource: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test"}), Endpoint: server.URL, Client: server.Client()}
-	result, err := g.SummarizeVideo(context.Background(), "https://youtu.be/3KtWfp0UopM", summary.Detailed)
+	result, err := g.SummarizeVideo(context.Background(), "https://youtu.be/3KtWfp0UopM", summary.Detailed, "")
 	if err != nil || len(result.Points) != 1 || len(result.TLDR) != 2 {
 		t.Fatalf("%+v %v", result, err)
 	}

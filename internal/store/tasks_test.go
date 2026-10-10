@@ -37,7 +37,7 @@ func TestTaskClaimsSurviveRedeliveryAndRejectOldGenerations(t *testing.T) {
 	if err = s.MarkDispatched(ctx, a.ID, first.QueuedAt); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.Enqueue(ctx, u.ID, a.ID, summary.Simple); !errors.Is(err, ErrBusy) {
+	if _, err = s.Enqueue(ctx, u.ID, a.ID, summary.Simple, ""); !errors.Is(err, ErrBusy) {
 		t.Fatalf("dispatched job must remain busy: %v", err)
 	}
 	jobs, err = s.QueuedJobs(ctx)
@@ -101,7 +101,7 @@ func TestTaskClaimsSurviveRedeliveryAndRejectOldGenerations(t *testing.T) {
 	if job, _, err = s.ClaimJob(ctx, a.ID, first.QueuedAt); err != nil || job != nil {
 		t.Fatalf("completed task reclaimed: %+v %v", job, err)
 	}
-	if _, err = s.Enqueue(ctx, u.ID, a.ID, summary.Simple); err != nil {
+	if _, err = s.Enqueue(ctx, u.ID, a.ID, summary.Simple, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.MarkDispatched(ctx, a.ID, first.QueuedAt); err != nil {

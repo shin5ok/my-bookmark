@@ -32,7 +32,7 @@ func (q *titleJobQueue) FinishJob(_ context.Context, _, _, title string, _ []str
 
 type titleSummarizer struct{ result summary.Result }
 
-func (s titleSummarizer) Summarize(context.Context, string, string, summary.Style) (summary.Result, error) {
+func (s titleSummarizer) Summarize(context.Context, string, string, summary.Style, string) (summary.Result, error) {
 	return s.result, nil
 }
 
@@ -50,7 +50,7 @@ func TestWorkerUsesGeneratedTitleForInitialAndRestyledSummary(t *testing.T) {
 			q := &titleJobQueue{article: store.Article{URL: "https://example.com/article", Title: "以前のタイトル", Active: true, Count: 1}}
 			w := NewWorker(q, titleSummarizer{summary.Result{Title: tc.generated, TLDR: []string{"結論", "重要性", "影響"}, Points: []string{"記事の結論"}}}, "test")
 			w.fetcher = &http.Client{Transport: articleTransportWithTitle{}}
-			w.process(context.Background(), "article", "lease", tc.style)
+			w.process(context.Background(), "article", "lease", tc.style, "")
 			if len(q.tldr) != 3 {
 				t.Fatal("TLDR was not forwarded")
 			}

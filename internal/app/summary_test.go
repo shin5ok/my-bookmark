@@ -15,10 +15,11 @@ import (
 
 type summaryTestDB struct {
 	testDB
-	article  store.Article
-	owned    bool
-	enqueues int
-	style    summary.Style
+	article     store.Article
+	owned       bool
+	enqueues    int
+	style       summary.Style
+	instruction string
 }
 
 func (d *summaryTestDB) Get(context.Context, string) (store.Article, error) { return d.article, nil }
@@ -29,9 +30,10 @@ func (d *summaryTestDB) Own(context.Context, string, string) (*store.Bookmark, e
 	return &store.Bookmark{}, nil
 }
 func (d *summaryTestDB) Comments(context.Context, string) ([]store.Bookmark, error) { return nil, nil }
-func (d *summaryTestDB) Enqueue(_ context.Context, _, _ string, style summary.Style) (string, error) {
+func (d *summaryTestDB) Enqueue(_ context.Context, _, _ string, style summary.Style, instruction string) (string, error) {
 	d.enqueues++
 	d.style = style
+	d.instruction = instruction
 	return "", store.ErrBusy
 }
 
@@ -41,13 +43,13 @@ func TestSummaryForwardsSelectedStyle(t *testing.T) {
 	db := &summaryTestDB{owned: true, article: store.Article{ID: id, Status: "ready"}}
 	a.db = db
 	r := httptest.NewRequest("POST", "/articles/"+id+"/summary", strings.NewReader(url.Values{
-		"csrf": {"correct"}, "style": {"detailed"},
+		"csrf": {"correct"}, "style": {"detailed"}, "instruction": {"  英語で7項目  "},
 	}.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.AddCookie(&http.Cookie{Name: "shiori_session", Value: "token"})
 	w := httptest.NewRecorder()
 	a.Handler().ServeHTTP(w, r)
-	if w.Code != http.StatusAccepted || db.enqueues != 1 || db.style != summary.Detailed {
+	if w.Code != http.StatusAccepted || db.enqueues != 1 || db.style != summary.Detailed || db.instruction != "英語で7項目" {
 		t.Fatalf("selected style: status=%d enqueues=%d style=%q", w.Code, db.enqueues, db.style)
 	}
 }
@@ -69,6 +71,33 @@ func TestSummaryRejectsUnknownStyleBeforeEnqueue(t *testing.T) {
 	}
 }
 
+func TestSummaryInstructionLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name, instruction string
+		status, enqueues  int
+	}{
+		{"empty", "", 202, 1},
+		{"Japanese boundary", strings.Repeat("詳", 200), 202, 1},
+		{"emoji boundary", strings.Repeat("😀", 200), 202, 1},
+		{"too long", strings.Repeat("詳", 201), 400, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := testApp(t)
+			id := strings.Repeat("a", 64)
+			db := &summaryTestDB{owned: true, article: store.Article{ID: id, Status: "ready"}}
+			a.db = db
+			r := httptest.NewRequest("POST", "/articles/"+id+"/summary", strings.NewReader(url.Values{"csrf": {"correct"}, "instruction": {tc.instruction}}.Encode()))
+			r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			r.AddCookie(&http.Cookie{Name: "shiori_session", Value: "token"})
+			w := httptest.NewRecorder()
+			a.Handler().ServeHTTP(w, r)
+			if w.Code != tc.status || db.enqueues != tc.enqueues {
+				t.Fatalf("status=%d enqueues=%d", w.Code, db.enqueues)
+			}
+		})
+	}
+}
+
 func TestSummaryDetailKeepsPreviousPointsAndOffersStyles(t *testing.T) {
 	for _, status := range []string{"ready", "queued", "processing", "failed"} {
 		t.Run(status, func(t *testing.T) {
@@ -84,7 +113,7 @@ func TestSummaryDetailKeepsPreviousPointsAndOffersStyles(t *testing.T) {
 				t.Fatalf("detail: %d %s", w.Code, w.Body.String())
 			}
 			body := w.Body.String()
-			for _, want := range []string{"以前の要約", "https://example.com/source", "具体的に", "詳細に", "シンプルに"} {
+			for _, want := range []string{"以前の要約", "https://example.com/source", "具体的に", "詳細に", "シンプルに", `class="summary-instruction"`, `size="18"`, `data-maxlength="200"`, "再要約"} {
 				if !strings.Contains(body, want) {
 					t.Errorf("detail missing %q", want)
 				}

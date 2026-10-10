@@ -40,16 +40,17 @@ type Article struct {
 	Sources     []string  `firestore:"sources"`
 }
 type SummaryJob struct {
-	Style      summary.Style `firestore:"style"`
-	ArticleID  string        `firestore:"article_id"`
-	UserID     string        `firestore:"user_id"`
-	Status     string        `firestore:"status"`
-	Stage      string        `firestore:"stage"`
-	QueuedAt   time.Time     `firestore:"queued_at"`
-	Lease      string        `firestore:"lease"`
-	LeaseUntil time.Time     `firestore:"lease_until"`
-	Attempts   int           `firestore:"attempts"`
-	LastError  string        `firestore:"last_error"`
+	Instruction string        `firestore:"instruction"`
+	Style       summary.Style `firestore:"style"`
+	ArticleID   string        `firestore:"article_id"`
+	UserID      string        `firestore:"user_id"`
+	Status      string        `firestore:"status"`
+	Stage       string        `firestore:"stage"`
+	QueuedAt    time.Time     `firestore:"queued_at"`
+	Lease       string        `firestore:"lease"`
+	LeaseUntil  time.Time     `firestore:"lease_until"`
+	Attempts    int           `firestore:"attempts"`
+	LastError   string        `firestore:"last_error"`
 }
 type Bookmark struct {
 	ArticleID  string    `firestore:"article_id"`

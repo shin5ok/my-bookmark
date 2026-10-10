@@ -12,10 +12,11 @@ type Result struct {
 }
 
 const (
-	Standard Style = ""
-	Concrete Style = "concrete"
-	Detailed Style = "detailed"
-	Simple   Style = "simple"
+	MaxInstructionLength       = 200
+	Standard             Style = ""
+	Concrete             Style = "concrete"
+	Detailed             Style = "detailed"
+	Simple               Style = "simple"
 )
 
 var ErrInvalidStyle = errors.New("invalid summary style")

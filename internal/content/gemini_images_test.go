@@ -65,11 +65,11 @@ func TestGeminiReceivesInlineImages(t *testing.T) {
 	}))
 	defer server.Close()
 	g := imageTestGemini(server)
-	result, err := g.SummarizeWithImages(context.Background(), "title", "body", []Image{{ImageCandidate: ImageCandidate{URL: "https://example.com/chart.png", Description: "売上グラフ"}, MIMEType: "image/png", Data: []byte("image-data")}}, summary.Standard)
+	result, err := g.SummarizeWithImages(context.Background(), "title", "body", []Image{{ImageCandidate: ImageCandidate{URL: "https://example.com/chart.png", Description: "売上グラフ"}, MIMEType: "image/png", Data: []byte("image-data")}}, summary.Standard, "")
 	if err != nil || len(result.Points) != 1 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	_, err = g.SummarizeWithImages(context.Background(), "title", "body", make([]Image, 4), summary.Standard)
+	_, err = g.SummarizeWithImages(context.Background(), "title", "body", make([]Image, 4), summary.Standard, "")
 	if err == nil {
 		t.Fatal("more than three images accepted")
 	}

@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"my-bookmark/internal/store"
 	"my-bookmark/internal/summary"
@@ -45,7 +47,12 @@ func (a *App) generate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "要約の種類を選び直してください。"})
 		return
 	}
-	state, err := a.db.Enqueue(r.Context(), session(r).User.ID, id, style)
+	instruction := strings.TrimSpace(r.PostFormValue("instruction"))
+	if utf8.RuneCountInString(instruction) > summary.MaxInstructionLength {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "追加指示は200文字以内で入力してください。"})
+		return
+	}
+	state, err := a.db.Enqueue(r.Context(), session(r).User.ID, id, style, instruction)
 	if errors.Is(err, store.ErrRateLimited) {
 		w.Header().Set("Retry-After", "60")
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "要約の利用上限です（1分3件・1日50件）。時間をおいて再試行してください。"})

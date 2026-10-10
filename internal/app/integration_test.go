@@ -18,7 +18,7 @@ import (
 
 type summaryStub struct{ points []string }
 
-func (s summaryStub) Summarize(context.Context, string, string, summary.Style) (summary.Result, error) {
+func (s summaryStub) Summarize(context.Context, string, string, summary.Style, string) (summary.Result, error) {
 	return summary.Result{Title: "簡潔な日本語タイトル", TLDR: []string{"結論です。", "重要性です。", "影響です。"}, Points: s.points}, nil
 }
 

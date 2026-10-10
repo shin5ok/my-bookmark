@@ -152,7 +152,7 @@ func TaskHandler(db TaskStore, worker *Worker) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		err = worker.processAttempt(r.Context(), job.ArticleID, lease, job.Style, job.Attempts < 3)
+		err = worker.processAttempt(r.Context(), job.ArticleID, lease, job.Style, job.Instruction, job.Attempts < 3)
 		if err != nil && !errors.Is(err, store.ErrBusy) {
 			// Release the lease even when the HTTP request's context has expired.
 			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 3*time.Second)

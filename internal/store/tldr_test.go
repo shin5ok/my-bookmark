@@ -6,6 +6,7 @@ import (
 	"errors"
 	"my-bookmark/internal/summary"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -46,24 +47,37 @@ func TestTLDRChangesOnlyWithSuccessfulOwnedJob(t *testing.T) {
 		}
 	}
 	check("初回タイトル", "初回本文")
-	if _, err = s.Enqueue(ctx, u.ID, a.ID, summary.Detailed); err != nil {
+	if _, err = s.Enqueue(ctx, "other-reader", a.ID, summary.Standard, "英語で7項目"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unowned request accepted: %v", err)
+	}
+	if _, err = s.Enqueue(ctx, u.ID, a.ID, summary.Standard, strings.Repeat("詳", 201)); err == nil {
+		t.Fatal("overlong instruction accepted")
+	}
+	if _, err = s.Enqueue(ctx, u.ID, a.ID, summary.Standard, "英語で7項目"); err != nil {
 		t.Fatal(err)
 	}
 	check("初回タイトル", "初回本文")
-	_, lease, err = s.NextQueued(ctx)
-	if err != nil {
+	job, lease, err := s.NextQueued(ctx)
+	if err != nil || job == nil || job.Instruction != "英語で7項目" {
+		t.Fatalf("instruction missing: %+v %v", job, err)
+	}
+	if err = s.RetryJob(ctx, a.ID, lease); err != nil {
 		t.Fatal(err)
+	}
+	job, lease, err = s.ClaimJob(ctx, a.ID, job.QueuedAt)
+	if err != nil || job == nil || job.Instruction != "英語で7項目" {
+		t.Fatalf("retry lost instruction: %+v %v", job, err)
 	}
 	if err = s.FinishJob(ctx, a.ID, lease, "失敗タイトル", []string{"失敗本文"}, "test", nil, "generation failed", []string{"不完全", "データ"}); err != nil {
 		t.Fatal(err)
 	}
 	check("初回タイトル", "初回本文")
-	if _, err = s.Enqueue(ctx, u.ID, a.ID, summary.Simple); err != nil {
+	if _, err = s.Enqueue(ctx, u.ID, a.ID, summary.Simple, ""); err != nil {
 		t.Fatal(err)
 	}
-	_, lease, err = s.NextQueued(ctx)
-	if err != nil {
-		t.Fatal(err)
+	job, lease, err = s.NextQueued(ctx)
+	if err != nil || job == nil || job.Instruction != "" {
+		t.Fatalf("previous instruction reused: %+v %v", job, err)
 	}
 	original = []string{"新しい結論", "新しい重要性", "新しい影響"}
 	if err = s.FinishJob(ctx, a.ID, lease, "更新タイトル", []string{"更新本文"}, "test", nil, "", original); err != nil {
@@ -102,7 +116,7 @@ func TestFailedSummarySavesTitle(t *testing.T) {
 			t.Fatalf("failed summary must save a valid title and preserve it on empty retry: %+v %v", got, err)
 		}
 		if title != "" {
-			if _, err = s.Enqueue(ctx, u.ID, a.ID, summary.Concrete); err != nil {
+			if _, err = s.Enqueue(ctx, u.ID, a.ID, summary.Concrete, ""); err != nil {
 				t.Fatal(err)
 			}
 		}

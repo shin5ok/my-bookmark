@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"cloud.google.com/go/firestore"
 	"my-bookmark/internal/summary"
@@ -40,9 +42,13 @@ func consumeQuota(q *quota, now time.Time) bool {
 	q.ExpiresAt = now.Add(48 * time.Hour)
 	return true
 }
-func (s *Store) Enqueue(ctx context.Context, uid, aid string, style summary.Style) (string, error) {
+func (s *Store) Enqueue(ctx context.Context, uid, aid string, style summary.Style, instruction string) (string, error) {
 	if !style.Valid() {
 		return "", summary.ErrInvalidStyle
+	}
+	instruction = strings.TrimSpace(instruction)
+	if utf8.RuneCountInString(instruction) > summary.MaxInstructionLength {
+		return "", errors.New("追加指示は200文字以内で入力してください。")
 	}
 	now := time.Now().UTC()
 	err := s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
@@ -58,7 +64,7 @@ func (s *Store) Enqueue(ctx context.Context, uid, aid string, style summary.Styl
 		if err = ad.DataTo(&a); err != nil {
 			return err
 		}
-		if a.Status == "ready" && style == summary.Standard {
+		if a.Status == "ready" && style == summary.Standard && instruction == "" {
 			return ErrBusy
 		}
 		jr := s.client.Collection("summary_jobs").Doc(aid)
@@ -84,6 +90,7 @@ func (s *Store) Enqueue(ctx context.Context, uid, aid string, style summary.Styl
 		}
 		j.ArticleID = aid
 		j.Style = style
+		j.Instruction = instruction
 		j.UserID = uid
 		j.Status = "queued"
 		j.Stage = "queued"
@@ -95,7 +102,7 @@ func (s *Store) Enqueue(ctx context.Context, uid, aid string, style summary.Styl
 		a.Status = "queued"
 		a.Stage = "queued"
 		a.Progress = "再試行を受け付けました"
-		if style != summary.Standard {
+		if style != summary.Standard || instruction != "" {
 			a.Progress = "ページを再取得して要約し直します"
 		}
 		a.LastError = ""

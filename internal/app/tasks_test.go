@@ -95,15 +95,17 @@ func TestDispatchFailureLeavesOutboxPending(t *testing.T) {
 }
 
 type videoSummaryFixture struct {
-	err   error
-	style summary.Style
+	err         error
+	style       summary.Style
+	instruction string
 }
 
-func (s *videoSummaryFixture) Summarize(context.Context, string, string, summary.Style) (summary.Result, error) {
+func (s *videoSummaryFixture) Summarize(context.Context, string, string, summary.Style, string) (summary.Result, error) {
 	return summary.Result{}, errors.New("video incorrectly sent through article path")
 }
-func (s *videoSummaryFixture) SummarizeVideo(_ context.Context, _ string, style summary.Style) (summary.Result, error) {
+func (s *videoSummaryFixture) SummarizeVideo(_ context.Context, _ string, style summary.Style, instruction string) (summary.Result, error) {
 	s.style = style
+	s.instruction = instruction
 	return summary.Result{Title: "動画の日本語タイトル", Points: []string{"動画の結論"}, TLDR: []string{"短い結論", "理由"}}, s.err
 }
 
@@ -147,7 +149,7 @@ func TestSummaryTaskDelivery(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id := strings.Repeat("a", 64)
-			db := &taskStoreFixture{titleJobQueue: titleJobQueue{article: store.Article{URL: "https://youtu.be/3KtWfp0UopM", Active: true, Count: 1}}, job: &store.SummaryJob{ArticleID: id, Attempts: tc.attempt, Style: summary.Detailed}, claimErr: tc.claimErr, finishErr: tc.finishErr}
+			db := &taskStoreFixture{titleJobQueue: titleJobQueue{article: store.Article{URL: "https://youtu.be/3KtWfp0UopM", Active: true, Count: 1}}, job: &store.SummaryJob{ArticleID: id, Attempts: tc.attempt, Style: summary.Detailed, Instruction: "英語で7項目"}, claimErr: tc.claimErr, finishErr: tc.finishErr}
 			if tc.stale {
 				db.job = nil
 			}
@@ -162,7 +164,7 @@ func TestSummaryTaskDelivery(t *testing.T) {
 			if w.Code != tc.status || db.retried != tc.retry {
 				t.Fatalf("HTTP %d retry=%v body=%s", w.Code, db.retried, w.Body.String())
 			}
-			if tc.name == "success" && (db.title != "動画の日本語タイトル" || len(db.tldr) != 2 || summarizer.style != summary.Detailed) {
+			if tc.name == "success" && (db.title != "動画の日本語タイトル" || len(db.tldr) != 2 || summarizer.style != summary.Detailed || summarizer.instruction != "英語で7項目") {
 				t.Fatalf("video result not saved: %+v", db)
 			}
 			if (tc.name == "retry exhausted" || tc.name == "unavailable video") && db.failure == "" {

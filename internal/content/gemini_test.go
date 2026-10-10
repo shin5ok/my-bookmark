@@ -69,7 +69,7 @@ func TestGeminiStructuredResponse(t *testing.T) {
 				Endpoint:    server.URL,
 				Client:      server.Client(),
 			}
-			result, err := g.Summarize(context.Background(), "title", "article body", summary.Standard)
+			result, err := g.Summarize(context.Background(), "title", "article body", summary.Standard, "")
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("result=%v err=%v", result, err)
 			}

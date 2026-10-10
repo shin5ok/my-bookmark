@@ -19,17 +19,19 @@ type imageWorkerSummary struct {
 	images         []content.Image
 	renderFallback bool
 	calls          int
+	instruction    string
 }
 
-func (s *imageWorkerSummary) Summarize(context.Context, string, string, summary.Style) (summary.Result, error) {
+func (s *imageWorkerSummary) Summarize(context.Context, string, string, summary.Style, string) (summary.Result, error) {
 	return summary.Result{Title: "本文だけの要約結果", Points: []string{"本文の結論"}, TLDR: []string{"結論", "理由"}}, nil
 }
 func (s *imageWorkerSummary) SelectImages(_ context.Context, _, _ string, candidates []content.ImageCandidate, limit int) ([]content.ImageCandidate, error) {
 	// Deliberately return too many: the worker must enforce its own download budget.
 	return candidates, nil
 }
-func (s *imageWorkerSummary) SummarizeWithImages(_ context.Context, _, _ string, images []content.Image, _ summary.Style) (summary.Result, error) {
+func (s *imageWorkerSummary) SummarizeWithImages(_ context.Context, _, _ string, images []content.Image, _ summary.Style, instruction string) (summary.Result, error) {
 	s.calls++
+	s.instruction = instruction
 	s.images = images
 	if s.renderFallback && s.calls == 1 {
 		return summary.Result{}, nil
@@ -87,7 +89,10 @@ func TestWorkerImageBudgetAndTextFallback(t *testing.T) {
 			w := NewWorker(q, s, "test")
 			w.fetcher = &http.Client{Transport: tr}
 			w.renderer = imageWorkerRenderer{}
-			w.process(context.Background(), "article", "lease", summary.Standard)
+			w.process(context.Background(), "article", "lease", summary.Standard, "画像を詳しく")
+			if !tc.bad && s.instruction != "画像を詳しく" {
+				t.Fatal("image instruction not forwarded")
+			}
 			if q.failure != "" || q.title != tc.wantTitle {
 				t.Fatalf("title=%s failure=%s", q.title, q.failure)
 			}

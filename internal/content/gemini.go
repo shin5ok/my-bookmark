@@ -25,11 +25,11 @@ type Gemini struct {
 	Endpoint                 string
 }
 
-func (g *Gemini) Summarize(ctx context.Context, title, body string, style summary.Style) (summary.Result, error) {
-	return g.generate(ctx, title, []any{map[string]string{"text": "記事タイトル: " + title + "\n記事本文:\n" + body}}, SummaryInstruction(style), style, time.Minute)
+func (g *Gemini) Summarize(ctx context.Context, title, body string, style summary.Style, instruction string) (summary.Result, error) {
+	return g.generate(ctx, title, []any{map[string]string{"text": "記事タイトル: " + title + "\n記事本文:\n" + body}}, CustomInstruction(SummaryInstruction(style), instruction), style, instruction, time.Minute)
 }
 
-func (g *Gemini) generate(ctx context.Context, title string, parts []any, instruction string, style summary.Style, timeout time.Duration) (summary.Result, error) {
+func (g *Gemini) generate(ctx context.Context, title string, parts []any, instruction string, style summary.Style, custom string, timeout time.Duration) (summary.Result, error) {
 	if !style.Valid() {
 		return summary.Result{}, summary.ErrInvalidStyle
 	}
@@ -42,6 +42,12 @@ func (g *Gemini) generate(ctx context.Context, title string, parts []any, instru
 		"tldr":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 0, "maxItems": 5},
 		"points":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "minItems": 0, "maxItems": 5},
 	}, "required": []string{"sufficient", "title", "points", "tldr"}}
+	if custom != "" {
+		properties := schema["properties"].(map[string]any)
+		for _, field := range []string{"points", "tldr"} {
+			delete(properties[field].(map[string]any), "maxItems")
+		}
+	}
 	output, err := g.generateJSON(ctx, parts, instruction, schema, timeout)
 	if err != nil {
 		return summary.Result{}, err
@@ -59,22 +65,22 @@ func (g *Gemini) generate(ctx context.Context, title string, parts []any, instru
 		parsed.Points[i] = strings.TrimSpace(parsed.Points[i])
 	}
 	title = strings.TrimSpace(parsed.Title)
-	if utf8.RuneCountInString(title) < 4 || utf8.RuneCountInString(title) > 60 || strings.ContainsAny(title, "\r\n<>") || !strings.ContainsFunc(title, func(r rune) bool {
+	if strings.ContainsAny(title, "\r\n<>") || (custom == "" && (utf8.RuneCountInString(title) < 4 || utf8.RuneCountInString(title) > 60 || !strings.ContainsFunc(title, func(r rune) bool {
 		return unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana)
-	}) {
+	}))) {
 		title = ""
 	}
 	if !parsed.Sufficient {
 		return summary.Result{Title: title}, nil
 	}
-	if err := ValidateSummary(parsed.Points); err != nil {
+	if err := ValidateSummaryWithInstruction(parsed.Points, custom); err != nil {
 		return summary.Result{}, err
 	}
 
 	for i := range parsed.TLDR {
 		parsed.TLDR[i] = strings.TrimSpace(parsed.TLDR[i])
 	}
-	if err := ValidateTLDR(parsed.TLDR); err != nil {
+	if err := ValidateTLDRWithInstruction(parsed.TLDR, custom); err != nil {
 		return summary.Result{}, err
 	}
 	return summary.Result{Title: title, Points: parsed.Points, TLDR: parsed.TLDR}, nil

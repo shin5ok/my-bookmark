@@ -53,7 +53,7 @@ func (w *Worker) Run(ctx context.Context) {
 			}
 			continue
 		}
-		w.process(ctx, job.ArticleID, lease, job.Style)
+		w.process(ctx, job.ArticleID, lease, job.Style, job.Instruction)
 	}
 }
 func wait(ctx context.Context, d time.Duration) bool {
@@ -66,13 +66,13 @@ func wait(ctx context.Context, d time.Duration) bool {
 		return true
 	}
 }
-func (w *Worker) process(parent context.Context, id, lease string, style summary.Style) {
-	if err := w.processAttempt(parent, id, lease, style, false); err != nil {
+func (w *Worker) process(parent context.Context, id, lease string, style summary.Style, instruction string) {
+	if err := w.processAttempt(parent, id, lease, style, instruction, false); err != nil {
 		slog.Error("summary processing failed", "article", id, "error", err)
 	}
 }
 
-func (w *Worker) processAttempt(parent context.Context, id, lease string, style summary.Style, retryTransient bool) error {
+func (w *Worker) processAttempt(parent context.Context, id, lease string, style summary.Style, instruction string, retryTransient bool) error {
 	ctx, cancel := context.WithTimeout(parent, 9*time.Minute)
 	defer cancel()
 	article, err := w.db.Get(ctx, id)
@@ -96,7 +96,7 @@ func (w *Worker) processAttempt(parent context.Context, id, lease string, style 
 		} else {
 			sources = []string{videoURL}
 			video, supported := w.summary.(interface {
-				SummarizeVideo(context.Context, string, summary.Style) (summary.Result, error)
+				SummarizeVideo(context.Context, string, summary.Style, string) (summary.Result, error)
 			})
 			if !supported {
 				failure = "動画の要約が設定されていません。"
@@ -104,11 +104,11 @@ func (w *Worker) processAttempt(parent context.Context, id, lease string, style 
 				return err
 			} else {
 				var result summary.Result
-				result, err = video.SummarizeVideo(ctx, videoURL, style)
+				result, err = video.SummarizeVideo(ctx, videoURL, style, instruction)
 				points, generatedTitle, tldr = result.Points, result.Title, result.TLDR
 				if err != nil {
 					failure = "動画を要約できませんでした。公開状態・視聴制限を確認し、時間をおいて再試行してください。"
-				} else if content.ValidateSummary(points) != nil || content.ValidateTLDR(tldr) != nil {
+				} else if content.ValidateSummaryWithInstruction(points, instruction) != nil || content.ValidateTLDRWithInstruction(tldr, instruction) != nil {
 					failure = "動画の内容を十分に確認できず、要約を作成できませんでした。"
 				}
 			}
@@ -131,7 +131,7 @@ func (w *Worker) processAttempt(parent context.Context, id, lease string, style 
 					return e
 				} else {
 					var result summary.Result
-					result, err = w.summarizeArticle(ctx, title, doc.Text, images, style)
+					result, err = w.summarizeArticle(ctx, title, doc.Text, images, style, instruction)
 					points, generatedTitle, tldr = result.Points, result.Title, result.TLDR
 					if err != nil {
 						failure = "要約を作成できませんでした。"
@@ -190,18 +190,18 @@ func (w *Worker) processAttempt(parent context.Context, id, lease string, style 
 							return e
 						} else {
 							var result summary.Result
-							result, err = w.summarizeArticle(ctx, title, input, images, style)
+							result, err = w.summarizeArticle(ctx, title, input, images, style, instruction)
 							points, generatedTitle, tldr = result.Points, result.Title, result.TLDR
 							if err != nil {
 								failure = "要約を作成できませんでした。"
-							} else if err = content.ValidateSummary(points); err != nil {
+							} else if err = content.ValidateSummaryWithInstruction(points, instruction); err != nil {
 								failure = "記事の情報が不足していて要約を作成できませんでした。"
 							}
 						}
 					}
 				}
 			} else if failure == "" {
-				if err = content.ValidateSummary(points); err != nil {
+				if err = content.ValidateSummaryWithInstruction(points, instruction); err != nil {
 					failure = "記事の要約形式を確認できませんでした。"
 				}
 			}
@@ -218,7 +218,7 @@ func (w *Worker) processAttempt(parent context.Context, id, lease string, style 
 	}
 	if generatedTitle != "" {
 		title = generatedTitle
-	} else if style != summary.Standard && article.Title != "" {
+	} else if (style != summary.Standard || instruction != "") && article.Title != "" {
 		title = article.Title
 	}
 	finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(parent), 3*time.Second)
@@ -237,7 +237,7 @@ func (w *Worker) processAttempt(parent context.Context, id, lease string, style 
 
 type imageSummarizer interface {
 	SelectImages(context.Context, string, string, []content.ImageCandidate, int) ([]content.ImageCandidate, error)
-	SummarizeWithImages(context.Context, string, string, []content.Image, summary.Style) (summary.Result, error)
+	SummarizeWithImages(context.Context, string, string, []content.Image, summary.Style, string) (summary.Result, error)
 }
 
 // collectImages shares a download budget across the initial and rendered page.
@@ -288,11 +288,11 @@ func (w *Worker) collectImages(ctx context.Context, id, lease string, doc conten
 	return nil
 }
 
-func (w *Worker) summarizeArticle(ctx context.Context, title, body string, images []content.Image, style summary.Style) (summary.Result, error) {
+func (w *Worker) summarizeArticle(ctx context.Context, title, body string, images []content.Image, style summary.Style, instruction string) (summary.Result, error) {
 	if model, supported := w.summary.(imageSummarizer); supported && len(images) > 0 {
-		return model.SummarizeWithImages(ctx, title, body, images, style)
+		return model.SummarizeWithImages(ctx, title, body, images, style, instruction)
 	}
-	return w.summary.Summarize(ctx, title, body, style)
+	return w.summary.Summarize(ctx, title, body, style, instruction)
 }
 func (w *Worker) stage(ctx context.Context, id, lease, stage, progress string, sources []string) error {
 	return w.db.UpdateStage(ctx, id, lease, stage, progress, sources)

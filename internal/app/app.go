@@ -38,7 +38,7 @@ type Database interface {
 	Comments(context.Context, string) ([]store.Bookmark, error)
 	Claim(context.Context, string, string) (string, error)
 	Finish(context.Context, string, string, string, []string, string, bool) error
-	Enqueue(context.Context, string, string, summary.Style) (string, error)
+	Enqueue(context.Context, string, string, summary.Style, string) (string, error)
 	Session(context.Context, string) (store.Session, error)
 	PutSession(context.Context, string, store.Session) error
 	DeleteSession(context.Context, string) error
@@ -46,7 +46,7 @@ type Database interface {
 	ConsumeOAuth(context.Context, string) (store.OAuthState, error)
 }
 type Summarizer interface {
-	Summarize(context.Context, string, string, summary.Style) (summary.Result, error)
+	Summarize(context.Context, string, string, summary.Style, string) (summary.Result, error)
 }
 type App struct {
 	cfg         Config
